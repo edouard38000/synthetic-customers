@@ -116,6 +116,19 @@ pub fn run(
                     state_path.display()
                 )
             })?;
+        if state
+            .scorer
+            .as_deref()
+            .is_some_and(|s| s != setup.embedder.name())
+        {
+            bail!(
+                "cannot resume: the saved answers were re-scored with the `{}` Scorer, \
+                 but this run uses `{}`. Re-score again with `report --rescore` first, or \
+                 choose another --out folder",
+                state.scorer.unwrap_or_default(),
+                setup.embedder.name()
+            );
+        }
         (state.seed, state.date, load_records(&data_path)?)
     } else {
         (setup.seed, Some(today_utc()), Vec::new())
@@ -340,15 +353,12 @@ fn write_reports(
     std::fs::write(&report_path, report::markdown(&analysis))
         .with_context(|| format!("cannot write {}", report_path.display()))?;
     let html_path = out_dir.join(HTML_FILE);
-    if html {
+    // An existing HTML page is kept in step with report.md.
+    if html || html_path.exists() {
         std::fs::write(&html_path, report_html::html(&analysis))
             .with_context(|| format!("cannot write {}", html_path.display()))?;
         Ok((report_path, Some(html_path)))
     } else {
-        if html_path.exists() {
-            std::fs::remove_file(&html_path)
-                .with_context(|| format!("cannot remove old {}", html_path.display()))?;
-        }
         Ok((report_path, None))
     }
 }

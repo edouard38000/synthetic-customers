@@ -45,6 +45,17 @@ pub fn html(a: &Analysis) -> String {
         .filter(|c| c.rank.is_some())
         .collect();
     let _ = writeln!(h, "<h2>Ranking</h2>");
+    if a.concepts
+        .iter()
+        .any(|c| c.customers > 0 && c.customers < crate::report::MIN_RELIABLE)
+    {
+        let _ = writeln!(
+            h,
+            "<p class=\"note\"><strong>Very few customers.</strong> At least one Concept has \
+             fewer than {} Synthetic customers: its band is unreliable.</p>",
+            crate::report::MIN_RELIABLE
+        );
+    }
     if ranked.is_empty() {
         let _ = writeln!(h, "<p>No Synthetic customer has answered yet.</p>");
     } else {
@@ -113,9 +124,9 @@ pub fn html(a: &Analysis) -> String {
             .collect();
         let _ = writeln!(
             h,
-            "<p class=\"note\">Left out on purpose: {}. The paper's Synthetic customers did not \
-             reproduce real differences by gender, region or ethnicity, so no result is shown \
-             for them. They are unreliable.</p>",
+            "<p class=\"note\">Left out on purpose: {}. Only age and income are broken down. The \
+             paper's Synthetic customers did not reproduce real differences by gender, region \
+             or ethnicity, so no result is shown for those: treat them as unreliable.</p>",
             names.join(", ")
         );
     }

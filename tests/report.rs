@@ -262,7 +262,9 @@ fn quotes_are_real_saved_answers_short_and_on_the_right_side() {
     let quotes: Vec<&str> = md.lines().filter_map(|l| l.strip_prefix("> \"")).collect();
     assert!(!quotes.is_empty(), "{md}");
     for q in quotes {
-        let text = q.split("\"").next().unwrap().trim_end_matches('…');
+        let text = q.split("\"").next().unwrap().trim_end_matches(['…', ' ']);
+        let text = text.replace("&lt;", "<").replace("&gt;", ">");
+        let text = text.as_str();
         assert!(
             rows.iter()
                 .any(|r| r["answer"].as_str().unwrap().contains(text)),
@@ -379,11 +381,19 @@ fn html_is_one_offline_file_with_svg_charts_and_escaped_text() {
     );
     assert!(html.contains("Mint toothpaste") && html.contains("Charcoal toothpaste"));
     assert!(html.contains("Left out on purpose"));
-    // Without --html there is no HTML, and an old one is removed.
-    ok(&f.report_cmd(&[]));
-    assert!(!f.path("out/report.html").exists());
-    ok(&f.report_cmd(&["--html"]));
-    assert!(f.path("out/report.html").exists());
+    // Without --html no HTML is made, and an existing one is kept up to date.
+    let g = Fixture::new(&full_run_file());
+    ok(&g.run(&[]));
+    assert!(!g.path("out/report.html").exists());
+    ok(&g.report_cmd(&["--html"]));
+    assert!(g.path("out/report.html").exists());
+    std::fs::write(g.path("out/report.html"), "stale").unwrap();
+    ok(&g.report_cmd(&[]));
+    assert!(
+        std::fs::read_to_string(g.path("out/report.html"))
+            .unwrap()
+            .contains("<svg")
+    );
 }
 
 #[test]

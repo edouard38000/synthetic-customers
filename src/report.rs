@@ -24,6 +24,8 @@ pub const QUOTES_PER_LIST: usize = 3;
 pub const QUOTE_MAX_CHARS: usize = 220;
 /// Groups smaller than this are flagged in breakdowns.
 pub const SMALL_GROUP: usize = 30;
+/// Fewer customers than this per Concept: the band is not trustworthy.
+pub const MIN_RELIABLE: usize = 10;
 
 /// The limits section: always in the report, whatever the run found.
 pub const LIMITS: [&str; 5] = [
@@ -189,10 +191,11 @@ pub fn analyse(
     }
 
     let (breakdowns, left_out) = breakdowns(run_file, records);
+    let used: Vec<String> = breakdowns.iter().map(|b| b.attribute.clone()).collect();
     let quotes = run_file
         .concepts
         .iter()
-        .map(|c| quotes_for(&c.name, records))
+        .map(|c| quotes_for(&c.name, records, &used))
         .collect();
 
     let model = match run_file.respondent {
@@ -310,7 +313,7 @@ fn breakdowns(run_file: &RunFile, records: &[AnswerRecord]) -> (Vec<Breakdown>, 
 
 /// Strongest "would buy" answers as reasons, strongest "would not buy"
 /// answers as objections, each distinct and quoted from a saved answer.
-fn quotes_for(concept: &str, records: &[AnswerRecord]) -> ConceptQuotes {
+fn quotes_for(concept: &str, records: &[AnswerRecord], used: &[String]) -> ConceptQuotes {
     let mut rows: Vec<&AnswerRecord> = records.iter().filter(|r| r.concept == concept).collect();
     rows.sort_by(|a, b| {
         b.expected_rating
@@ -329,7 +332,7 @@ fn quotes_for(concept: &str, records: &[AnswerRecord]) -> ConceptQuotes {
             let who: Vec<&str> = r
                 .attributes
                 .iter()
-                .filter(|(a, _)| breakdown_kind(a).is_some())
+                .filter(|(a, _)| used.iter().any(|u| u == *a))
                 .map(|(_, v)| v.as_str())
                 .collect();
             quotes.push(Quote {
@@ -371,10 +374,14 @@ pub fn short_quote(answer: &str) -> String {
         return text;
     }
     let head: String = text.chars().take(QUOTE_MAX_CHARS).collect();
-    if let Some(end) = head.rfind(['.', '!', '?'])
-        && end >= 40
-    {
-        return head[..=end].to_string();
+    let bytes = head.as_bytes();
+    let sentence_end = head.char_indices().rev().find(|&(i, c)| {
+        matches!(c, '.' | '!' | '?')
+            && i >= 40
+            && bytes.get(i + 1).is_none_or(|b| b.is_ascii_whitespace())
+    });
+    if let Some((end, _)) = sentence_end {
+        return format!("{} …", &head[..=end]);
     }
     match head.rfind(' ') {
         Some(space) => format!("{}…", &head[..space]),
@@ -403,6 +410,17 @@ pub fn markdown(a: &Analysis) -> String {
     }
 
     let _ = writeln!(md, "## Ranking\n");
+    if a.concepts
+        .iter()
+        .any(|c| c.customers > 0 && c.customers < MIN_RELIABLE)
+    {
+        let _ = writeln!(
+            md,
+            "> **Very few customers.** At least one Concept has fewer than {MIN_RELIABLE} \
+             Synthetic customers: its band is unreliable, so do not read \"clear of the others\" \
+             as certain.\n"
+        );
+    }
     let ranked: Vec<&ConceptResult> = a
         .ranking
         .iter()
@@ -431,7 +449,7 @@ pub fn markdown(a: &Analysis) -> String {
                 lo,
                 hi,
                 c.customers,
-                verdict(c, ranked.len())
+                escape_cell(&verdict(c, ranked.len()))
             );
         }
         let _ = writeln!(md, "\n{}\n", ranking_summary(&ranked));
@@ -519,9 +537,9 @@ pub fn markdown(a: &Analysis) -> String {
         let names: Vec<String> = a.left_out.iter().map(|n| format!("`{n}`")).collect();
         let _ = writeln!(
             md,
-            "Left out on purpose: {}. The paper's Synthetic customers did not reproduce real \
-             differences by gender, region or ethnicity, so no result is shown for them. \
-             They are unreliable.\n",
+            "Left out on purpose: {}. Only age and income are broken down. The paper's Synthetic \
+             customers did not reproduce real differences by gender, region or ethnicity, so \
+             no result is shown for those: treat them as unreliable.\n",
             names.join(", ")
         );
     }
@@ -581,7 +599,12 @@ fn write_quotes(md: &mut String, title: &str, quotes: &[Quote]) {
         } else {
             format!(" ({})", q.who)
         };
-        let _ = writeln!(md, "> \"{}\"{who}\n", q.text);
+        let text = q
+            .text
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('`', "'");
+        let _ = writeln!(md, "> \"{text}\"{who}\n");
     }
 }
 
