@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use synthetic_customers::anchors::placeholder_anchor_sets;
 use synthetic_customers::embedder::{Embedder, FakeEmbedder};
-use synthetic_customers::respondent::{FakeRespondent, Respondent};
+use synthetic_customers::respondent::{CliRespondent, FakeRespondent, Respondent};
 use synthetic_customers::run::{self, RunSetup};
-use synthetic_customers::run_file::{RunFile, ScorerChoice};
+use synthetic_customers::run_file::{RespondentChoice, RunFile, ScorerChoice};
 use synthetic_customers::ssr::DEFAULT_EPSILON;
 
 /// Test a product idea on AI-played Synthetic customers.
@@ -28,11 +28,29 @@ enum Command {
         /// [default: <run file name>-results next to the run file].
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Continue the stopped run in the output folder, asking only the
+        /// Synthetic customers who have not answered yet.
+        #[arg(long)]
+        resume: bool,
         /// Testing only: answer with canned answers from this JSON file
         /// instead of real Synthetic customers.
         #[arg(long, hide = true)]
         fake_answers: Option<PathBuf>,
+        /// Testing only: log each fake customer call to this file.
+        #[arg(long, hide = true, requires = "fake_answers")]
+        fake_calls_log: Option<PathBuf>,
+        /// Testing only: fake customers fail after this many calls, like a
+        /// usage limit.
+        #[arg(long, hide = true, requires = "fake_answers")]
+        fake_fail_after: Option<usize>,
     },
+}
+
+/// Testing-only options for the fake Respondent.
+struct FakeOptions {
+    answers: Option<PathBuf>,
+    calls_log: Option<PathBuf>,
+    fail_after: Option<usize>,
 }
 
 fn main() -> ExitCode {
@@ -50,25 +68,63 @@ fn real_main() -> Result<()> {
         Command::Run {
             run_file,
             out,
+            resume,
             fake_answers,
-        } => run_command(run_file, out, fake_answers),
+            fake_calls_log,
+            fake_fail_after,
+        } => run_command(
+            run_file,
+            out,
+            resume,
+            FakeOptions {
+                answers: fake_answers,
+                calls_log: fake_calls_log,
+                fail_after: fake_fail_after,
+            },
+        ),
     }
 }
 
-fn run_command(path: PathBuf, out: Option<PathBuf>, fake_answers: Option<PathBuf>) -> Result<()> {
+fn run_command(path: PathBuf, out: Option<PathBuf>, resume: bool, fake: FakeOptions) -> Result<()> {
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("cannot read run file {}", path.display()))?;
-    let run_file =
+    let mut run_file =
         RunFile::parse(&text).with_context(|| format!("invalid run file {}", path.display()))?;
+    // A Concept's image path is relative to the run file.
+    let base = path.parent().unwrap_or(std::path::Path::new("."));
+    for concept in &mut run_file.concepts {
+        if let Some(image) = &concept.image {
+            let image = std::path::absolute(base.join(image))
+                .with_context(|| format!("bad image path for Concept `{}`", concept.name))?;
+            if !image.is_file() {
+                bail!(
+                    "the image of Concept `{}` is not a file: {}",
+                    concept.name,
+                    image.display()
+                );
+            }
+            concept.image = Some(image);
+        }
+    }
     for w in &run_file.warnings {
         eprintln!("warning: {w}");
     }
 
-    let respondent: Box<dyn Respondent> = match fake_answers {
-        Some(answers) => Box::new(FakeRespondent::load(&answers, &run_file.concepts)?),
-        None => bail!(
-            "real Synthetic customers (claude -p / codex exec) are not available in this version yet"
-        ),
+    let respondent: Box<dyn Respondent> = match fake.answers {
+        Some(answers) => {
+            let mut r = FakeRespondent::load(&answers, &run_file.concepts)?;
+            if let Some(log) = &fake.calls_log {
+                r = r.with_calls_log(log)?;
+            }
+            if let Some(n) = fake.fail_after {
+                r = r.failing_after(n);
+            }
+            Box::new(r)
+        }
+        None => match run_file.respondent {
+            RespondentChoice::Claude => Box::new(CliRespondent::Claude(run_file.model)),
+            RespondentChoice::Codex => Box::new(CliRespondent::Codex),
+        },
     };
 
     let anchor_sets = placeholder_anchor_sets();
@@ -104,6 +160,7 @@ fn run_command(path: PathBuf, out: Option<PathBuf>, fake_answers: Option<PathBuf
             anchor_sets,
             epsilon: DEFAULT_EPSILON,
             seed,
+            resume,
         },
         &out_dir,
     )?;

@@ -2,7 +2,8 @@
 //!
 //! ```toml
 //! customers_per_concept = 200   # default 200, warning outside 150–400
-//! model = "haiku"               # haiku (default), sonnet, opus
+//! respondent = "claude"         # claude (default, `claude -p`) or codex (`codex exec`)
+//! model = "haiku"               # haiku (default), sonnet, opus; claude only
 //! concurrency = 8               # default 8
 //! scorer = "local"              # local (default), openai, voyage, fake
 //! seed = 42                     # optional, for a repeatable Customer mix sample
@@ -52,6 +53,17 @@ impl Model {
     }
 }
 
+/// Which command-line runner plays the Synthetic customers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RespondentChoice {
+    /// `claude -p --model <model>` (Claude Code).
+    #[default]
+    Claude,
+    /// `codex exec` with the user's default Codex model.
+    Codex,
+}
+
 /// Which embedding model scores the answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -93,7 +105,8 @@ struct RawRunFile {
     customer_mix: IndexMap<String, IndexMap<String, f64>>,
     customers_per_concept: Option<i64>,
     #[serde(default)]
-    model: Model,
+    respondent: RespondentChoice,
+    model: Option<Model>,
     concurrency: Option<i64>,
     #[serde(default)]
     scorer: ScorerChoice,
@@ -106,6 +119,7 @@ pub struct RunFile {
     pub concepts: Vec<Concept>,
     pub customer_mix: CustomerMix,
     pub customers_per_concept: usize,
+    pub respondent: RespondentChoice,
     pub model: Model,
     pub concurrency: usize,
     pub scorer: ScorerChoice,
@@ -161,13 +175,22 @@ impl RunFile {
             Some(n) => n as usize,
         };
 
+        if raw.respondent == RespondentChoice::Codex && raw.model.is_some() {
+            warnings.push(
+                "`model` is ignored with respondent = \"codex\": codex exec uses your default \
+                 Codex model"
+                    .to_string(),
+            );
+        }
+
         let customer_mix = CustomerMix::new(raw.customer_mix)?;
 
         Ok(Self {
             concepts: raw.concepts,
             customer_mix,
             customers_per_concept,
-            model: raw.model,
+            respondent: raw.respondent,
+            model: raw.model.unwrap_or_default(),
             concurrency,
             scorer: raw.scorer,
             seed: raw.seed,
@@ -189,6 +212,7 @@ mod tests {
         assert_eq!(run.customers_per_concept, 200);
         assert_eq!(run.concurrency, 8);
         assert_eq!(run.model, Model::Haiku);
+        assert_eq!(run.respondent, RespondentChoice::Claude);
         assert_eq!(run.scorer, ScorerChoice::Local);
         assert!(run.warnings.is_empty());
     }
