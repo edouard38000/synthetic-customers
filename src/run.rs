@@ -277,14 +277,24 @@ pub fn run(
             "Scoring {} saved answers that were not scored yet.",
             unscored.len()
         );
-        score_pending(&scorer, &mut saved, &unscored).with_context(|| {
-            format!(
+        if let Err(e) = score_pending(&scorer, &mut saved, &unscored) {
+            // Keep a report of what is scored, as after any stopped run.
+            write_reports(
+                out_dir,
+                run_file,
+                setup.embedder.name(),
+                seed,
+                date.as_deref(),
+                &scored(&saved),
+                setup.html,
+            )?;
+            return Err(e.context(format!(
                 "cannot score the {} saved answers that were not scored yet; they stay \
                  saved in {}, so run the same command with --resume again later",
                 unscored.len(),
                 data_path.display()
-            )
-        })?;
+            )));
+        }
         write_records(&data_path, &saved)?;
     }
 
@@ -321,34 +331,61 @@ pub fn run(
         );
     }
 
-    let mut data = std::io::BufWriter::new(
+    let data = std::sync::Mutex::new(std::io::BufWriter::new(
         std::fs::OpenOptions::new()
             .append(true)
             .open(&data_path)
             .with_context(|| format!("cannot write {}", data_path.display()))?,
-    );
+    ));
+    // Append lines to the data file and flush. Each worker saves its
+    // customer's answer, unscored, the moment it arrives, so an answer is on
+    // disk even while scoring is slow or failing; scored lines are appended
+    // once a batch is scored. A reload keeps the scored line of a customer
+    // saved twice.
+    let append = |answers: &[&SavedAnswer]| -> Result<()> {
+        let mut data = data
+            .lock()
+            .map_err(|_| anyhow::anyhow!("the data file writer failed"))?;
+        for a in answers {
+            serde_json::to_writer(&mut *data, a)?;
+            data.write_all(b"\n")?;
+        }
+        data.flush()?;
+        Ok(())
+    };
     let mut failure: Option<anyhow::Error> = None;
     let mut scorer_failed = false;
     let started = Instant::now();
     let next = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| {
-        let (tx, rx) = mpsc::channel::<(usize, Result<String>)>();
+        let (tx, rx) = mpsc::channel::<Result<SavedAnswer>>();
         for _ in 0..workers {
             let tx = tx.clone();
-            let (jobs, next, stop, customers) = (&jobs, &next, &stop, &customers);
+            let (jobs, next, stop, customers, append) = (&jobs, &next, &stop, &customers, &append);
             scope.spawn(move || {
                 while !stop.load(Ordering::SeqCst) {
                     let j = next.fetch_add(1, Ordering::SeqCst);
                     let Some(&(ci, i)) = jobs.get(j) else { break };
                     let concept = &run_file.concepts[ci];
-                    let answer = setup
+                    let saved = setup
                         .respondent
                         .answer(concept, i, &customers[ci][i])
                         .with_context(|| {
                             format!("customer {} of Concept `{}`", i + 1, concept.name)
+                        })
+                        .and_then(|answer| {
+                            let line = SavedAnswer {
+                                concept: concept.name.clone(),
+                                customer: i + 1,
+                                attributes: customers[ci][i].attributes.clone(),
+                                answer,
+                                score: None,
+                            };
+                            append(&[&line])?;
+                            Ok(line)
                         });
-                    if tx.send((j, answer)).is_err() {
+                    if tx.send(saved).is_err() {
                         break;
                     }
                 }
@@ -356,22 +393,8 @@ pub fn run(
         }
         drop(tx);
 
-        // Append each answer, unscored, the moment it arrives; append the
-        // scored lines once a batch is scored. A reload keeps the scored
-        // line of a customer saved twice.
-        let mut append = |answers: &[&SavedAnswer]| -> Result<()> {
-            for a in answers {
-                serde_json::to_writer(&mut data, a)?;
-                data.write_all(b"\n")?;
-            }
-            data.flush()?;
-            Ok(())
-        };
         let mut pending: Vec<usize> = Vec::new();
-        let score_batch = |saved: &mut Vec<SavedAnswer>,
-                           pending: &mut Vec<usize>,
-                           append: &mut dyn FnMut(&[&SavedAnswer]) -> Result<()>|
-         -> Result<()> {
+        let score_batch = |saved: &mut Vec<SavedAnswer>, pending: &mut Vec<usize>| -> Result<()> {
             let batch = std::mem::take(pending);
             score_pending(&scorer, saved, &batch)?;
             let lines: Vec<&SavedAnswer> = batch.iter().map(|&i| &saved[i]).collect();
@@ -379,22 +402,10 @@ pub fn run(
         };
         let mut answered = 0;
         let mut last_shown = None;
-        for (j, answer) in rx {
-            let (ci, i) = jobs[j];
-            let result = answer.and_then(|answer| {
-                let line = SavedAnswer {
-                    concept: run_file.concepts[ci].name.clone(),
-                    customer: i + 1,
-                    attributes: customers[ci][i].attributes.clone(),
-                    answer,
-                    score: None,
-                };
-                append(&[&line])?;
+        for line in rx {
+            let result = line.and_then(|line| {
                 saved.push(line);
                 pending.push(saved.len() - 1);
-                Ok(())
-            });
-            let result = result.and_then(|()| {
                 answered += 1;
                 show_progress(
                     already + answered,
@@ -405,7 +416,7 @@ pub fn run(
                     &mut last_shown,
                 );
                 if !scorer_failed && pending.len() >= SCORE_BATCH {
-                    score_batch(&mut saved, &mut pending, &mut append).inspect_err(|_| {
+                    score_batch(&mut saved, &mut pending).inspect_err(|_| {
                         scorer_failed = true;
                     })
                 } else {
@@ -421,7 +432,7 @@ pub fn run(
         }
         if !scorer_failed
             && !pending.is_empty()
-            && let Err(e) = score_batch(&mut saved, &mut pending, &mut append)
+            && let Err(e) = score_batch(&mut saved, &mut pending)
         {
             failure.get_or_insert(e);
         }

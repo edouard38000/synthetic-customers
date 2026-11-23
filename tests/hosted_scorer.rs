@@ -413,6 +413,24 @@ fn a_scorer_failure_mid_run_keeps_every_answer_and_resume_scores_them_without_as
     assert!(report.to_lowercase().contains("short sample"), "{report}");
     f.assert_key_nowhere();
 
+    // A resume whose scoring of the saved answers fails (the anchors
+    // score, the answers do not) asks nobody and keeps a report.
+    let anchors = mock.requests();
+    mock.fail_with(move |n| {
+        (n > anchors).then(|| (500, r#"{"error":{"message":"overloaded"}}"#.to_string()))
+    });
+    let out = f.run(Some(&mock), &[("OPENAI_API_KEY", KEY)], &["--resume"]);
+    assert!(!out.ok());
+    out.assert_no_key();
+    assert!(
+        out.stderr().contains("server error (HTTP 500)") && out.stderr().contains("not scored yet"),
+        "{}",
+        out.stderr()
+    );
+    assert_eq!(f.calls(), first_calls, "no customer asked");
+    assert_eq!(f.data().len(), first_calls.len());
+    assert!(f.path("out/report.md").exists());
+
     // The key works again: the resume scores the saved answers and asks
     // only the customers never asked.
     mock.heal();
