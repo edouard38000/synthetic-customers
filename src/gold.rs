@@ -46,10 +46,12 @@ pub struct Agreement {
 /// Score every gold answer and compare with the human ratings. Also returns
 /// each answer's expected Purchase intent, in order.
 pub fn measure(scorer: &SsrScorer, gold: &[GoldAnswer]) -> Result<(Agreement, Vec<f64>)> {
-    let mut predicted = Vec::with_capacity(gold.len());
-    for g in gold {
-        predicted.push(expected_rating(&scorer.score(&g.answer)?));
-    }
+    let answers: Vec<&str> = gold.iter().map(|g| g.answer.as_str()).collect();
+    let predicted: Vec<f64> = scorer
+        .score_many(&answers)?
+        .iter()
+        .map(expected_rating)
+        .collect();
     let human: Vec<f64> = gold.iter().map(|g| g.score as f64).collect();
     let mae = predicted
         .iter()

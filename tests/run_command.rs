@@ -288,18 +288,6 @@ fn invalid_run_files_get_clear_errors() {
     );
 }
 
-#[test]
-fn hosted_scorers_are_not_available_yet() {
-    let f = Fixture::new(&run_file("scorer = \"openai\""));
-    let output = f.run();
-    assert!(!output.status.success());
-    assert!(
-        stderr(&output).contains("scorer `openai` is not available in this version yet"),
-        "{}",
-        stderr(&output)
-    );
-}
-
 fn run_with(f: &Fixture, extra: &[&str]) -> std::process::Output {
     Command::cargo_bin("synthetic-customers")
         .unwrap()

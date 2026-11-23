@@ -91,3 +91,56 @@ fn gold_set_covers_every_rating_and_many_products() {
         "every answer is about its own product"
     );
 }
+
+/// Opt-in switch for the hosted Scorers' gold-set check: it calls the real
+/// APIs with the user's keys and costs a fraction of a cent.
+const LIVE_ENV: &str = "SYNTHETIC_CUSTOMERS_LIVE_SCORERS";
+
+/// The hosted Scorers on the gold set. Skipped unless `LIVE_ENV` is on and
+/// the provider's key is set, so `cargo test` and CI never need a key.
+/// Until a first measurement sets their own thresholds (`docs/scorer.md`),
+/// they are held to the local Scorer's.
+#[test]
+fn hosted_scorers_agree_with_the_gold_set() {
+    use synthetic_customers::embedder::Embedder;
+    use synthetic_customers::hosted_scorer::{HostedEmbedder, Provider};
+
+    if !is_on(LIVE_ENV) {
+        eprintln!("skipped: set {LIVE_ENV}=1 and OPENAI_API_KEY / VOYAGE_API_KEY to run it");
+        return;
+    }
+    let gold = gold::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/gold_set.json"))
+        .unwrap();
+    for provider in [Provider::OpenAi, Provider::Voyage] {
+        if std::env::var(provider.key_env()).map_or(true, |k| k.trim().is_empty()) {
+            eprintln!(
+                "skipped {}: {} is not set",
+                provider.model(),
+                provider.key_env()
+            );
+            continue;
+        }
+        let embedder = HostedEmbedder::from_env(provider).unwrap();
+        let ssr = SsrScorer::new(&embedder, &anchor_sets(), DEFAULT_EPSILON).unwrap();
+        let (agreement, _) = gold::measure(&ssr, &gold).unwrap();
+        eprintln!(
+            "{}: Spearman {:.3}, MAE {:.3} on {} gold answers",
+            embedder.name(),
+            agreement.spearman,
+            agreement.mae,
+            gold.len()
+        );
+        assert!(
+            agreement.spearman >= MIN_SPEARMAN,
+            "{}: Spearman {:.3} is below {MIN_SPEARMAN}",
+            embedder.name(),
+            agreement.spearman
+        );
+        assert!(
+            agreement.mae <= MAX_MAE,
+            "{}: MAE {:.3} is above {MAX_MAE}",
+            embedder.name(),
+            agreement.mae
+        );
+    }
+}

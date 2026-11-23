@@ -110,21 +110,37 @@ impl<'a> SsrScorer<'a> {
         if anchor_sets.is_empty() {
             bail!("SSR needs at least one Anchor set");
         }
+        // Every anchor statement in one call: a hosted Scorer then needs one
+        // request for all the Anchor sets, not one per set.
+        let texts: Vec<&str> = anchor_sets
+            .iter()
+            .flat_map(|set| set.statements.iter().map(String::as_str))
+            .collect();
+        let vectors = embedder
+            .embed(&texts)
+            .context("embedding the Anchor sets")?;
+        if vectors.len() != texts.len() {
+            bail!(
+                "Scorer `{}` returned {} vectors for {} anchor statements",
+                embedder.name(),
+                vectors.len(),
+                texts.len()
+            );
+        }
+        let mut vectors = vectors.into_iter();
         let mut anchor_embeddings = Vec::with_capacity(anchor_sets.len());
         for set in anchor_sets {
-            let texts: Vec<&str> = set.statements.iter().map(String::as_str).collect();
-            let vectors = embedder
-                .embed(&texts)
-                .with_context(|| format!("embedding Anchor set `{}`", set.id))?;
-            let vectors: [Vec<f64>; RATINGS] = vectors.try_into().map_err(|v: Vec<_>| {
-                anyhow::anyhow!(
-                    "Scorer `{}` returned {} vectors for {} anchor statements",
-                    embedder.name(),
-                    v.len(),
-                    RATINGS
-                )
-            })?;
-            anchor_embeddings.push(vectors);
+            let set_vectors: Vec<Vec<f64>> = vectors.by_ref().take(set.statements.len()).collect();
+            let set_vectors: [Vec<f64>; RATINGS] =
+                set_vectors.try_into().map_err(|v: Vec<_>| {
+                    anyhow::anyhow!(
+                        "Anchor set `{}` has {} statements, not {}",
+                        set.id,
+                        v.len(),
+                        RATINGS
+                    )
+                })?;
+            anchor_embeddings.push(set_vectors);
         }
         Ok(Self {
             embedder,
@@ -135,20 +151,39 @@ impl<'a> SsrScorer<'a> {
 
     /// The Purchase intent distribution of one answer.
     pub fn score(&self, answer: &str) -> Result<Distribution> {
-        let vector = self
-            .embedder
-            .embed(&[answer])?
+        self.score_many(&[answer])?
             .into_iter()
             .next()
-            .context("Scorer returned no vector for the answer")?;
+            .context("Scorer returned no vector for the answer")
+    }
+
+    /// The distributions of several answers, embedded in one call (the
+    /// Embedder splits it into requests as it needs).
+    pub fn score_many(&self, answers: &[&str]) -> Result<Vec<Distribution>> {
+        if answers.is_empty() {
+            return Ok(Vec::new());
+        }
+        let vectors = self.embedder.embed(answers)?;
+        if vectors.len() != answers.len() {
+            bail!(
+                "Scorer `{}` returned {} vectors for {} answers",
+                self.embedder.name(),
+                vectors.len(),
+                answers.len()
+            );
+        }
+        Ok(vectors.iter().map(|v| self.distribution(v)).collect())
+    }
+
+    fn distribution(&self, vector: &[f64]) -> Distribution {
         let per_set: Vec<Distribution> = self
             .anchor_embeddings
             .iter()
             .map(|anchors| {
-                let similarities = std::array::from_fn(|r| gamma(&vector, &anchors[r]));
+                let similarities = std::array::from_fn(|r| gamma(vector, &anchors[r]));
                 similarities_to_distribution(&similarities, self.epsilon)
             })
             .collect();
-        Ok(average_distributions(&per_set))
+        average_distributions(&per_set)
     }
 }

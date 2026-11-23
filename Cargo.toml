@@ -17,6 +17,9 @@ serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 tokenizers = { version = "0.22.2", default-features = false, features = ["fancy-regex"] }
 toml = { version = "1.2.2", features = ["preserve_order"] }
 tract-onnx = { version = "0.23.10", default-features = false }
+# The hosted Scorers' HTTP client: the same ureq + rustls (ring) stack hf-hub
+# already uses, so no OpenSSL or aws-lc is linked.
+ureq = { version = "3.5.2", default-features = false, features = ["rustls", "json"] }
 
 [dev-dependencies]
 assert_cmd = "2.2.2"

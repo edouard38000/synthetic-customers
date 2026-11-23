@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use synthetic_customers::anchors::{AnchorSet, anchor_sets};
 use synthetic_customers::embedder::{Embedder, FakeEmbedder};
+use synthetic_customers::hosted_scorer::{HostedEmbedder, Provider};
 use synthetic_customers::local_scorer::{self, DEFAULT_MODEL, LocalEmbedder};
 use synthetic_customers::respondent::{CliRespondent, FakeRespondent, Respondent};
 use synthetic_customers::run::{self, RunSetup};
@@ -227,10 +228,8 @@ fn build_scorer(choice: ScorerChoice) -> Result<(Box<dyn Embedder>, Vec<AnchorSe
             let embedder = LocalEmbedder::load(DEFAULT_MODEL, &local_scorer::cache_dir()?)?;
             Ok((Box::new(embedder), sets))
         }
-        other => bail!(
-            "scorer `{}` is not available in this version yet",
-            other.as_str()
-        ),
+        ScorerChoice::Openai => Ok((Box::new(HostedEmbedder::from_env(Provider::OpenAi)?), sets)),
+        ScorerChoice::Voyage => Ok((Box::new(HostedEmbedder::from_env(Provider::Voyage)?), sets)),
     }
 }
 

@@ -117,3 +117,67 @@ count as unset, for both variables).
 The margins leave room for small floating-point differences between machines
 while catching a changed model, broken pooling or reworded Anchor sets. The
 same numbers came out of a release and a debug build.
+
+# The hosted Scorers
+
+Two hosted Scorers can replace the local one, each with your own API key:
+
+| `scorer =` | Model | Key (environment variable) | Price | Cost per 1,000 answers |
+|---|---|---|---|---:|
+| `"openai"` | OpenAI `text-embedding-3-small` (the paper's Scorer) | `OPENAI_API_KEY` | $0.02 per 1M tokens | about $0.001 |
+| `"voyage"` | Voyage AI `voyage-4` | `VOYAGE_API_KEY` | $0.06 per 1M tokens, first 200M tokens free | about $0.004 (free within the free tokens) |
+
+Prices are from the official pricing pages on 2026-11-23
+([OpenAI](https://developers.openai.com/api/docs/pricing),
+[Voyage AI](https://docs.voyageai.com/docs/pricing)). The cost column assumes
+about 60 tokens per answer (a few sentences); each run also embeds the 30
+anchor statements once, a few hundred tokens.
+
+- **Keys come only from the environment.** Set the variable in the shell that
+  runs `synthetic-customers`. The key is never asked for, and never written to
+  the run file, `run.toml`, `run-state.json`, `answers.jsonl`, the report,
+  logs or error messages. A run whose key is missing stops before asking any
+  Synthetic customer.
+- **A ChatGPT subscription is not an OpenAI API key.** The OpenAI API is a
+  separate account, billed by use, with keys from
+  [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
+- **Voyage AI's free tier** gives 200 million free tokens per account, but
+  its rate limits can be much lower until a payment method is added (see
+  [its rate limits](https://docs.voyageai.com/docs/rate-limits)). The Scorer
+  sends answers in batches (one request for all anchor statements, then one
+  per 32 answers) and retries a refused request a few times, honouring
+  `Retry-After`.
+- **Privacy: the answers leave your computer.** With a hosted Scorer every
+  Synthetic customer's answer (and the anchor statements) is sent to OpenAI
+  or Voyage AI to be embedded, under that provider's terms. The local Scorer
+  sends nothing anywhere.
+
+## When scoring fails
+
+Each answer is saved to `answers.jsonl` the moment it arrives, before it is
+scored. If the Scorer fails mid-run (network down, key revoked, rate limit or
+quota), the run stops asking new Synthetic customers, keeps every answer it
+received, and writes the report from the answers already scored, marked as a
+short sample. `run --resume` then scores the saved answers first, without
+asking those customers again, and asks only the customers never asked. A
+resume scores only the answers that have no score yet; `report --rescore`
+re-scores every answer.
+
+## Gold-set agreement
+
+`tests/gold_agreement.rs` also scores the gold set with both hosted Scorers,
+only when `SYNTHETIC_CUSTOMERS_LIVE_SCORERS=1` and the provider's key are set
+(each run costs a fraction of a cent). It is skipped otherwise, including in
+CI. Until a first measurement sets their own thresholds, they are held to the
+local Scorer's (Spearman at least 0.88, MAE at most 0.90).
+
+| Scorer | Spearman | MAE |
+|---|---:|---:|
+| openai (text-embedding-3-small) | not measured yet | not measured yet |
+| voyage (voyage-4) | not measured yet | not measured yet |
+
+Measure with:
+
+```bash
+SYNTHETIC_CUSTOMERS_LIVE_SCORERS=1 cargo test --test gold_agreement hosted -- --nocapture
+```
