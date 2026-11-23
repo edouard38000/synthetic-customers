@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use std::collections::HashMap;
-use synthetic_customers::anchors::{AnchorSet, placeholder_anchor_sets};
+use synthetic_customers::anchors::{AnchorSet, anchor_sets};
 use synthetic_customers::embedder::{Embedder, FakeEmbedder};
 use synthetic_customers::ssr::{
     Distribution, SsrScorer, average_distributions, expected_rating, similarities_to_distribution,
@@ -122,7 +122,7 @@ fn scorer_averages_over_anchor_sets() {
 
 #[test]
 fn fake_scorer_is_hand_computable() {
-    let sets = placeholder_anchor_sets();
+    let sets = anchor_sets();
     let embedder = FakeEmbedder::new(&sets);
     let scorer = SsrScorer::new(&embedder, &sets, 0.0).unwrap();
     assert_close(&scorer.score("5").unwrap(), &[0.0, 0.0, 0.0, 0.0, 1.0]);
