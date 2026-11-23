@@ -1,0 +1,152 @@
+# Release: on a pushed version tag (v*), build the four prebuilt binaries,
+# attach them to a GitHub release with SHA-256 checksums.
+#
+# Builds run natively on GitHub-hosted runners (free for this public repo),
+# one per OS and CPU, so crates that link a native library (the ONNX runtime
+# the local Scorer will bring) build the same way they would on a user's
+# machine. The publish step is light and runs on the victus runner.
+#
+# Assets, one per target, plus SHA256SUMS.txt (sha256sum format):
+#   synthetic-customers-<target>.tar.gz   macOS and Linux
+#   synthetic-customers-<target>.zip      Windows
+# Each archive holds the binary, LICENSE and README.md (when present).
+# install.sh and install.ps1 rely on these names: change them together.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  BIN: synthetic-customers
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_STRIP: symbols
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          # gnu, not musl: the ONNX runtime ships prebuilt libraries for
+          # glibc only. Built on the oldest hosted Ubuntu so the binary runs
+          # on any distro with glibc 2.35 or newer.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the tag matches the Cargo.toml version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - name: Install Rust
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install stable --profile minimal --target "$TARGET"
+          rustup default stable
+
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          # Windows: link the C runtime statically so users don't need the
+          # Visual C++ redistributable. If a native dependency (e.g. the ONNX
+          # runtime) fails to link with "LNK2038 RuntimeLibrary mismatch",
+          # remove this line.
+          if [[ "$TARGET" == *windows* ]]; then
+            export RUSTFLAGS="-C target-feature=+crt-static"
+          fi
+          cargo build --release --locked --target "$TARGET"
+
+      - name: Smoke test
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          exe=""
+          if [[ "$TARGET" == *windows* ]]; then exe=".exe"; fi
+          "target/$TARGET/release/$BIN$exe" --version
+
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          name="$BIN-$TARGET"
+          mkdir -p "dist/$name"
+          exe=""
+          if [[ "$TARGET" == *windows* ]]; then exe=".exe"; fi
+          cp "target/$TARGET/release/$BIN$exe" "dist/$name/"
+          cp LICENSE "dist/$name/"
+          if [ -f README.md ]; then cp README.md "dist/$name/"; fi
+          cd dist
+          if [[ "$TARGET" == *windows* ]]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+          rm -rf "$name"
+          ls -l
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: [self-hosted, victus]
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write checksums
+        working-directory: dist
+        run: |
+          count=$(find . -maxdepth 1 -name "$BIN-*" | wc -l)
+          if [ "$count" -ne 4 ]; then
+            echo "::error::Expected 4 archives, found $count"
+            ls -l
+            exit 1
+          fi
+          sha256sum "$BIN"-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
