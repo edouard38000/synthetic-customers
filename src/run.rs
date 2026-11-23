@@ -90,7 +90,7 @@ pub fn run(
     let state_path = out_dir.join(STATE_FILE);
     let has_answers = std::fs::metadata(&data_path).is_ok_and(|m| m.len() > 0);
 
-    let (seed, date, mut records) = if has_answers {
+    let (seed, date, saved_scorer, mut records) = if has_answers {
         if !setup.resume {
             bail!(
                 "{} already holds answers from an earlier run: pass --resume to continue \
@@ -129,9 +129,14 @@ pub fn run(
                 setup.embedder.name()
             );
         }
-        (state.seed, state.date, load_records(&data_path)?)
+        (
+            state.seed,
+            state.date,
+            state.scorer,
+            load_records(&data_path)?,
+        )
     } else {
-        (setup.seed, Some(today_utc()), Vec::new())
+        (setup.seed, Some(today_utc()), None, Vec::new())
     };
 
     let scorer = SsrScorer::new(setup.embedder, &setup.anchor_sets, setup.epsilon)?;
@@ -187,7 +192,7 @@ pub fn run(
         serde_json::to_string(&RunState {
             seed,
             date: date.clone(),
-            scorer: None,
+            scorer: saved_scorer,
         })?,
     )
     .with_context(|| format!("cannot write {}", state_path.display()))?;

@@ -551,7 +551,7 @@ pub fn markdown(a: &Analysis) -> String {
          of each Concept, unedited except for cutting long answers short.\n"
     );
     for q in &a.quotes {
-        let _ = writeln!(md, "### {}\n", q.concept);
+        let _ = writeln!(md, "### {}\n", escape_cell(&q.concept));
         write_quotes(&mut md, "Top reasons to buy", &q.reasons);
         write_quotes(&mut md, "Top objections", &q.objections);
     }

@@ -461,3 +461,16 @@ fn re_reporting_something_that_is_not_a_run_folder_fails_clearly() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn resume_keeps_the_scorer_saved_by_a_re_score() {
+    let f = Fixture::new(&full_run_file());
+    ok(&f.run(&[]));
+    ok(&f.report_cmd(&["--rescore", "--scorer", "fake"]));
+    let state = || std::fs::read_to_string(f.path("out/run-state.json")).unwrap();
+    assert!(state().contains("\"scorer\":\"fake\""), "{}", state());
+    ok(&f.run(&["--resume"]));
+    assert!(state().contains("\"scorer\":\"fake\""), "{}", state());
+    ok(&f.report_cmd(&[]));
+    assert!(f.md().contains("- Scorer: fake"));
+}
