@@ -307,10 +307,10 @@ fn section_between(text: &str, from: &str, to: &str) -> String {
 #[test]
 fn limits_credits_and_run_details_are_always_there() {
     // A short sample with one Concept and no age or income: the sparsest report.
-    let run = format!(
+    let run = String::from(
         "scorer = \"fake\"\nmodel = \"sonnet\"\nseed = 3\ncustomers_per_concept = 40\n\
          [[concepts]]\nname = \"Only\"\ntext = \"One idea.\"\n\
-         [customer_mix.region]\n\"Midwest\" = 1.0\n"
+         [customer_mix.region]\n\"Midwest\" = 1.0\n",
     );
     let f = Fixture::new(&run);
     let mut ans = serde_json::from_str::<Value>(&answers()).unwrap();
