@@ -2,8 +2,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use synthetic_customers::anchors::{AnchorSet, placeholder_anchor_sets};
+use synthetic_customers::anchors::{AnchorSet, anchor_sets};
 use synthetic_customers::embedder::{Embedder, FakeEmbedder};
+use synthetic_customers::local_scorer::{self, DEFAULT_MODEL, LocalEmbedder};
 use synthetic_customers::respondent::{CliRespondent, FakeRespondent, Respondent};
 use synthetic_customers::run::{self, RunSetup};
 use synthetic_customers::run_file::{RespondentChoice, RunFile, ScorerChoice};
@@ -19,6 +20,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Check the setup and download the local Scorer's model once (about
+    /// 130 MB, cached for later runs, which then score offline).
+    Setup,
     /// Run a confirmed run file end to end: ask every Synthetic customer,
     /// score each answer and write the report.
     Run {
@@ -90,6 +94,7 @@ fn main() -> ExitCode {
 
 fn real_main() -> Result<()> {
     match Cli::parse().command {
+        Command::Setup => setup_command(),
         Command::Run {
             run_file,
             out,
@@ -215,14 +220,63 @@ fn print_output(output: &run::RunOutput) {
 
 /// The Scorer's embedder and the Anchor sets it scores against.
 fn build_scorer(choice: ScorerChoice) -> Result<(Box<dyn Embedder>, Vec<AnchorSet>)> {
-    let anchor_sets = placeholder_anchor_sets();
+    let sets = anchor_sets();
     match choice {
-        ScorerChoice::Fake => Ok((Box::new(FakeEmbedder::new(&anchor_sets)), anchor_sets)),
+        ScorerChoice::Fake => Ok((Box::new(FakeEmbedder::new(&sets)), sets)),
+        ScorerChoice::Local => {
+            let embedder = LocalEmbedder::load(DEFAULT_MODEL, &local_scorer::cache_dir()?)?;
+            Ok((Box::new(embedder), sets))
+        }
         other => bail!(
             "scorer `{}` is not available in this version yet",
             other.as_str()
         ),
     }
+}
+
+/// Check what a run needs and download the local Scorer's model once.
+fn setup_command() -> Result<()> {
+    let runners: Vec<&str> = ["claude", "codex"]
+        .into_iter()
+        .filter(|name| {
+            std::process::Command::new(name)
+                .arg("--version")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        })
+        .collect();
+    if runners.is_empty() {
+        println!(
+            "warning: neither `claude` nor `codex` is on the PATH; real Synthetic customers \
+             need one of them"
+        );
+    } else {
+        println!("Synthetic customers can run with: {}", runners.join(", "));
+    }
+
+    let cache = local_scorer::cache_dir()?;
+    if DEFAULT_MODEL.download(&cache)? {
+        println!(
+            "Downloaded the local Scorer's model ({}).",
+            DEFAULT_MODEL.name
+        );
+    } else {
+        println!(
+            "The local Scorer's model ({}) is already downloaded.",
+            DEFAULT_MODEL.name
+        );
+    }
+    let embedder = LocalEmbedder::load(DEFAULT_MODEL, &cache)?;
+    let ssr = SsrScorer::new(&embedder, &anchor_sets(), DEFAULT_EPSILON)
+        .context("the local Scorer's model does not run")?;
+    ssr.score("I would probably buy it.")
+        .context("the local Scorer's model does not run")?;
+    println!("Model cache: {}", cache.display());
+    println!("Ready: runs with scorer = \"local\" now score offline.");
+    Ok(())
 }
 
 fn report_command(

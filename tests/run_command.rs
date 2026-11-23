@@ -289,13 +289,12 @@ fn invalid_run_files_get_clear_errors() {
 }
 
 #[test]
-fn real_scorers_are_not_available_yet() {
-    // No `scorer` line: the default is the local Scorer.
-    let f = Fixture::new(&run_file(""));
+fn hosted_scorers_are_not_available_yet() {
+    let f = Fixture::new(&run_file("scorer = \"openai\""));
     let output = f.run();
     assert!(!output.status.success());
     assert!(
-        stderr(&output).contains("scorer `local` is not available in this version yet"),
+        stderr(&output).contains("scorer `openai` is not available in this version yet"),
         "{}",
         stderr(&output)
     );
@@ -701,4 +700,33 @@ fn a_missing_respondent_cli_fails_before_asking_anyone() {
         stderr(&output)
     );
     assert!(!f.path("out/answers.jsonl").exists());
+}
+
+#[test]
+fn local_scorer_without_its_model_stops_before_asking_anyone() {
+    let f = Fixture::new(&run_file("scorer = \"local\""));
+    let empty_cache = TempDir::new().unwrap();
+    let output = Command::cargo_bin("synthetic-customers")
+        .unwrap()
+        .arg("run")
+        .arg(f.path("run.toml"))
+        .arg("--out")
+        .arg(f.path("out"))
+        .arg("--fake-answers")
+        .arg(f.path("answers.json"))
+        .arg("--fake-calls-log")
+        .arg(f.path("calls.log"))
+        .env("SYNTHETIC_CUSTOMERS_CACHE_DIR", empty_cache.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let err = stderr(&output);
+    assert!(err.contains("synthetic-customers setup"), "{err}");
+    assert!(
+        std::fs::read_to_string(f.path("calls.log"))
+            .unwrap_or_default()
+            .is_empty(),
+        "no Synthetic customer should be asked"
+    );
+    assert!(!f.path("out/report.md").exists());
 }

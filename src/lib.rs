@@ -5,6 +5,8 @@
 pub mod anchors;
 pub mod customer_mix;
 pub mod embedder;
+pub mod gold;
+pub mod local_scorer;
 pub mod report;
 pub mod report_html;
 pub mod respondent;

@@ -19,29 +19,75 @@ impl AnchorSet {
     }
 }
 
-/// Placeholder Anchor sets for the walking skeleton. The real sets (PyMC
-/// Labs' published ones, or six sets written from the paper's App. C.1)
-/// replace these with the local Scorer.
-pub fn placeholder_anchor_sets() -> Vec<AnchorSet> {
+/// The six Anchor sets every Scorer scores against.
+///
+/// PyMC Labs' code (github.com/pymc-labs/semantic-similarity-rating) does not
+/// publish the paper's purchase-intent statements, and the paper describes
+/// them without listing them. These six sets of five are written from its
+/// App. C.1: short, generic and product-independent; the lowest statement
+/// says a purchase is unlikely, the middle one is indifferent or unsure, the
+/// highest says the customer would buy, and the two between sit halfway.
+/// Each set words purchase intent in a different way. See `docs/scorer.md`.
+pub fn anchor_sets() -> Vec<AnchorSet> {
     vec![
         AnchorSet::new(
-            "placeholder-1",
+            "likelihood",
             [
-                "I would definitely not buy this product.",
-                "I probably would not buy this product.",
-                "I am not sure whether I would buy this product.",
-                "I would probably buy this product.",
-                "I would definitely buy this product.",
+                "I would definitely not buy it.",
+                "I probably would not buy it.",
+                "I am not sure whether I would buy it or not.",
+                "I would probably buy it.",
+                "I would definitely buy it.",
             ],
         ),
         AnchorSet::new(
-            "placeholder-2",
+            "interest",
             [
-                "This is not for me at all, I'd never purchase it.",
-                "It doesn't really appeal to me, I'd likely pass.",
-                "I could go either way on buying it.",
-                "It appeals to me and I'd likely purchase it.",
-                "I love it and would purchase it right away.",
+                "This doesn't interest me at all, I wouldn't purchase it.",
+                "I'm not very interested and would likely pass on it.",
+                "I'm indifferent, I could take it or leave it.",
+                "It interests me and I'd likely purchase it.",
+                "I really want this and would purchase it.",
+            ],
+        ),
+        AnchorSet::new(
+            "fit",
+            [
+                "It's not for me, I'd never get it.",
+                "It's probably not for me.",
+                "It might or might not be for me.",
+                "It seems like a good fit for me, I'd likely get it.",
+                "It's exactly what I want, I'd get it for sure.",
+            ],
+        ),
+        AnchorSet::new(
+            "chance",
+            [
+                "There is no chance I would buy this product.",
+                "There is a small chance I would buy this product.",
+                "There is about an even chance I would buy this product.",
+                "There is a good chance I would buy this product.",
+                "I am certain I would buy this product.",
+            ],
+        ),
+        AnchorSet::new(
+            "trial",
+            [
+                "I wouldn't even try it.",
+                "I doubt I'd try it.",
+                "Maybe I'd try it, maybe not.",
+                "I'd likely give it a try.",
+                "I'd buy it right away.",
+            ],
+        ),
+        AnchorSet::new(
+            "spoken",
+            [
+                "No, I'm not going to buy that.",
+                "I don't think I'd buy that.",
+                "I don't know if I'd buy that.",
+                "I think I'd buy that.",
+                "Yes, I'm going to buy that.",
             ],
         ),
     ]
