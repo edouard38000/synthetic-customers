@@ -78,36 +78,39 @@ pub enum CliRespondent {
 /// How long one Synthetic customer may take before the call is stopped.
 pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Gives each customer call its own private working folder.
+static CALLS: AtomicUsize = AtomicUsize::new(0);
+
 impl CliRespondent {
-    fn command(&self, concept: &Concept, last_message: &Path) -> Command {
+    /// `image` is the private copy of the Concept's image, if any.
+    fn command(&self, image: Option<&Path>, work: &Path, last_message: &Path) -> Command {
         match self {
             CliRespondent::Claude(model) => {
                 let mut cmd = Command::new("claude");
                 cmd.args(["-p", "--model", model.as_str(), "--output-format", "text"])
                     .args(["--no-session-persistence", "--disable-slash-commands"])
                     .args(["--strict-mcp-config", "--setting-sources", ""]);
-                match concept.image.as_ref().and_then(|i| i.parent()) {
-                    // The only tool a customer gets is reading the Concept's image.
-                    Some(dir) => {
-                        cmd.args(["--tools", "Read", "--allowed-tools", "Read", "--add-dir"])
-                            .arg(dir);
-                    }
-                    None => {
-                        cmd.args(["--tools", ""]);
-                    }
+                if image.is_some() {
+                    // The only tool a customer gets is reading the Concept's
+                    // image, from a private folder holding nothing else.
+                    cmd.args(["--tools", "Read", "--allowed-tools", "Read", "--add-dir"])
+                        .arg(work);
+                } else {
+                    cmd.args(["--tools", ""]);
                 }
                 cmd
             }
             CliRespondent::Codex => {
                 let mut cmd = Command::new("codex");
+                // `-` (prompt on stdin) comes before `--image`, which takes
+                // several values and would swallow it.
                 cmd.args(["exec", "--skip-git-repo-check", "--sandbox", "read-only"])
                     .args(["--color", "never", "--output-last-message"])
-                    .arg(last_message);
-                if let Some(image) = &concept.image {
+                    .arg(last_message)
+                    .arg("-");
+                if let Some(image) = image {
                     cmd.arg("--image").arg(image);
                 }
-                // The prompt comes on stdin.
-                cmd.arg("-");
                 cmd
             }
         }
@@ -119,39 +122,85 @@ impl CliRespondent {
             CliRespondent::Codex => "codex exec",
         }
     }
+
+    /// Fail early, before any customer is asked, when the command-line
+    /// runner is not installed.
+    pub fn check_installed(&self) -> Result<()> {
+        let name = match self {
+            CliRespondent::Claude(_) => "claude",
+            CliRespondent::Codex => "codex",
+        };
+        let ok = Command::new(name)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            bail!(
+                "`{name}` is not installed or not on the PATH: real Synthetic customers need \
+                 {} (respondent = \"{name}\" in the run file)",
+                self.program()
+            );
+        }
+        Ok(())
+    }
+
+    fn ask(&self, concept: &Concept, customer: &SyntheticCustomer, work: &Path) -> Result<String> {
+        let image = match &concept.image {
+            Some(original) => {
+                let name = original
+                    .file_name()
+                    .unwrap_or(std::ffi::OsStr::new("image"));
+                let copy = work.join(name);
+                std::fs::copy(original, &copy).with_context(|| {
+                    format!("cannot copy the image of Concept `{}`", concept.name)
+                })?;
+                Some(copy)
+            }
+            None => None,
+        };
+        let concept = Concept {
+            image: image.clone(),
+            ..concept.clone()
+        };
+        let last_message = work.join("answer.txt");
+        let mut cmd = self.command(image.as_deref(), work, &last_message);
+        cmd.current_dir(work);
+        let stdout = run_with_timeout(cmd, &prompt(&concept, customer), ANSWER_TIMEOUT)?;
+        let answer = match self {
+            CliRespondent::Claude(_) => stdout,
+            CliRespondent::Codex => {
+                std::fs::read_to_string(&last_message).context("codex exec wrote no answer")?
+            }
+        };
+        let answer = answer.trim().to_string();
+        if answer.is_empty() {
+            bail!("it returned an empty answer");
+        }
+        Ok(answer)
+    }
 }
 
 impl Respondent for CliRespondent {
     fn answer(
         &self,
         concept: &Concept,
-        index: usize,
+        _index: usize,
         customer: &SyntheticCustomer,
     ) -> Result<String> {
-        // Run outside the user's project so its instructions and settings do
-        // not leak into the customer's answer.
-        let work = std::env::temp_dir();
-        let last_message = work.join(format!(
-            "synthetic-customers-{}-{}-{index}.txt",
+        // Each call runs in its own new folder, outside the user's project,
+        // so no project instructions or other files reach the customer.
+        let work = std::env::temp_dir().join(format!(
+            "synthetic-customers-{}-{}",
             std::process::id(),
-            sanitize(&concept.name)
+            CALLS.fetch_add(1, Ordering::SeqCst)
         ));
-        let mut cmd = self.command(concept, &last_message);
-        cmd.current_dir(&work);
-        let stdout = run_with_timeout(cmd, &prompt(concept, customer), ANSWER_TIMEOUT)
-            .with_context(|| format!("{} failed", self.program()));
-        let answer = match self {
-            CliRespondent::Claude(_) => stdout,
-            CliRespondent::Codex => stdout.and_then(|_| {
-                std::fs::read_to_string(&last_message).context("codex exec wrote no answer")
-            }),
-        };
-        let _ = std::fs::remove_file(&last_message);
-        let answer = answer?.trim().to_string();
-        if answer.is_empty() {
-            bail!("{} returned an empty answer", self.program());
-        }
-        Ok(answer)
+        std::fs::create_dir(&work).with_context(|| format!("cannot create {}", work.display()))?;
+        let answer = self.ask(concept, customer, &work);
+        let _ = std::fs::remove_dir_all(&work);
+        answer.with_context(|| format!("{} failed", self.program()))
     }
 
     fn seconds_per_answer(&self) -> f64 {
@@ -164,16 +213,12 @@ impl Respondent for CliRespondent {
     }
 }
 
-fn sanitize(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .take(40)
-        .collect()
-}
-
 /// Run `cmd` with `input` on stdin; return stdout, or fail with the end of
 /// stderr when it exits non-zero or takes longer than `timeout`.
 fn run_with_timeout(mut cmd: Command, input: &str, timeout: Duration) -> Result<String> {
+    // Its own process group, so a timeout also stops anything it started.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -182,17 +227,19 @@ fn run_with_timeout(mut cmd: Command, input: &str, timeout: Duration) -> Result<
         .context("cannot start it: is it installed and on the PATH?")?;
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let input = input.to_string();
-    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    std::thread::spawn(move || stdin.write_all(input.as_bytes()));
     let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut stderr = child.stderr.take().expect("stderr is piped");
-    let out_reader = std::thread::spawn(move || {
+    let (out_tx, out_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut s = String::new();
-        stdout.read_to_string(&mut s).map(|_| s)
+        let _ = out_tx.send(stdout.read_to_string(&mut s).map(|_| s));
     });
-    let err_reader = std::thread::spawn(move || {
+    let (err_tx, err_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut s = String::new();
         let _ = stderr.read_to_string(&mut s);
-        s
+        let _ = err_tx.send(s);
     });
 
     let started = Instant::now();
@@ -201,18 +248,21 @@ fn run_with_timeout(mut cmd: Command, input: &str, timeout: Duration) -> Result<
             break status;
         }
         if started.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_group(&mut child);
             bail!("no answer after {} seconds", timeout.as_secs());
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    let _ = writer.join();
-    let out = out_reader
-        .join()
-        .map_err(|_| anyhow::anyhow!("output reader panicked"))?
-        .context("cannot read its output")?;
-    let err = err_reader.join().unwrap_or_default();
+    // A process it left behind may hold the pipes open: don't wait forever.
+    let grace = Duration::from_secs(5);
+    let out = match out_rx.recv_timeout(grace) {
+        Ok(out) => out.context("cannot read its output")?,
+        Err(_) => {
+            kill_group(&mut child);
+            bail!("its output did not close after it exited");
+        }
+    };
+    let err = err_rx.recv_timeout(grace).unwrap_or_default();
     if !status.success() {
         let tail: String = {
             let text = if err.trim().is_empty() { &out } else { &err };
@@ -222,6 +272,17 @@ fn run_with_timeout(mut cmd: Command, input: &str, timeout: Duration) -> Result<
         bail!("exited with {status}: {tail}");
     }
     Ok(out)
+}
+
+fn kill_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    let _ = Command::new("kill")
+        .arg("-KILL")
+        .arg(format!("-{}", child.id()))
+        .stderr(Stdio::null())
+        .status();
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Canned answers for tests, from a JSON file mapping each Concept's name to

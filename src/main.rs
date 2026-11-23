@@ -121,10 +121,14 @@ fn run_command(path: PathBuf, out: Option<PathBuf>, resume: bool, fake: FakeOpti
             }
             Box::new(r)
         }
-        None => match run_file.respondent {
-            RespondentChoice::Claude => Box::new(CliRespondent::Claude(run_file.model)),
-            RespondentChoice::Codex => Box::new(CliRespondent::Codex),
-        },
+        None => {
+            let r = match run_file.respondent {
+                RespondentChoice::Claude => CliRespondent::Claude(run_file.model),
+                RespondentChoice::Codex => CliRespondent::Codex,
+            };
+            r.check_installed()?;
+            Box::new(r)
+        }
     };
 
     let anchor_sets = placeholder_anchor_sets();

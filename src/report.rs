@@ -37,6 +37,15 @@ pub fn markdown(
     );
     let _ = writeln!(md, "|---|---:|---:|---:|---:|---:|---:|---:|");
     for s in summaries {
+        if s.customers == 0 {
+            // Stopped before anyone answered: no scores to show.
+            let _ = writeln!(
+                md,
+                "| {} | 0 | — | — | — | — | — | — |",
+                escape_cell(&s.concept)
+            );
+            continue;
+        }
         let _ = write!(
             md,
             "| {} | {} | {:.2} |",

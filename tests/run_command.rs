@@ -504,7 +504,7 @@ fn claude_respondent_runs_claude_p_with_the_model_and_the_papers_prompt() {
     std::fs::create_dir(&bin).unwrap();
     let log = f.path("claude.log");
     let script = format!(
-        "#!/bin/sh\necho \"ARGS: $*\" >> '{}'\ncat >> '{}'\necho 'I would probably buy it, 4.'\n",
+        "#!/bin/sh\n[ \"$1\" = --version ] && exit 0\necho \"ARGS: $*\" >> '{}'\ncat >> '{}'\necho 'I would probably buy it, 4.'\n",
         log.display(),
         log.display()
     );
@@ -532,8 +532,12 @@ fn claude_respondent_runs_claude_p_with_the_model_and_the_papers_prompt() {
     assert!(log.contains("Impersonate a consumer with the following attributes"));
     assert!(log.contains("A toothpaste with real mint leaves."));
     assert!(log.contains("--tools Read"), "{log}");
-    let image = std::path::absolute(f.path("mint.png")).unwrap();
-    assert!(log.contains(&image.display().to_string()), "{log}");
+    // The customer sees a private copy of the image, not the user's folder.
+    assert!(log.contains("/mint.png. Look at it"), "{log}");
+    assert!(
+        !log.contains(&f.path("mint.png").display().to_string()),
+        "{log}"
+    );
 
     let rows = read_data(&f.path("out/answers.jsonl"));
     assert_eq!(rows.len(), 3);
@@ -557,7 +561,7 @@ fn a_failing_claude_stops_the_run_with_its_error() {
     std::fs::create_dir(&bin).unwrap();
     std::fs::write(
         bin.join("claude"),
-        "#!/bin/sh\ncat > /dev/null\necho 'Usage limit reached' >&2\nexit 1\n",
+        "#!/bin/sh\n[ \"$1\" = --version ] && exit 0\ncat > /dev/null\necho 'Usage limit reached' >&2\nexit 1\n",
     )
     .unwrap();
     std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -575,10 +579,11 @@ fn a_failing_claude_stops_the_run_with_its_error() {
     assert!(err.contains("claude -p failed"), "{err}");
     assert!(err.contains("Usage limit reached"), "{err}");
     assert!(err.contains("0 of 8 Synthetic customers answered"), "{err}");
+    let report = std::fs::read_to_string(f.path("out/report.md")).unwrap();
+    assert!(report.contains("**Short sample.**"), "{report}");
     assert!(
-        std::fs::read_to_string(f.path("out/report.md"))
-            .unwrap()
-            .contains("**Short sample.**")
+        report.contains("| Mint toothpaste | 0 | — | — | — | — | — | — |"),
+        "no made-up scores without answers: {report}"
     );
 }
 
@@ -606,4 +611,94 @@ fn codex_ignores_the_model_with_a_warning_and_a_missing_image_is_an_error() {
         "{}",
         stderr(&output)
     );
+}
+
+/// The real Respondent for Codex, with a stand-in `codex` on the PATH that
+/// records its arguments and prompt and writes its answer where `codex exec
+/// --output-last-message` would.
+#[cfg(unix)]
+#[test]
+fn codex_respondent_runs_codex_exec_with_the_prompt_on_stdin_and_the_image() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new(&format!(
+        "scorer = \"fake\"\nrespondent = \"codex\"\ncustomers_per_concept = 3\nconcurrency = 3\n\
+         [[concepts]]\nname = \"Mint\"\ntext = \"A toothpaste with real mint leaves.\"\nimage = \"mint.png\"\n\
+         [[concepts]]\nname = \"Mint!\"\ntext = \"Same, with a bang.\"\n{MIX}"
+    ));
+    std::fs::write(f.path("mint.png"), b"not really a png").unwrap();
+    let bin = f.path("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let log = f.path("codex.log");
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = --version ]; then exit 0; fi\n\
+         echo \"ARGS: $*\" >> '{log}'\n\
+         prompt=$(cat)\n\
+         echo \"$prompt\" >> '{log}'\n\
+         while [ $# -gt 0 ]; do\n\
+           if [ \"$1\" = --output-last-message ]; then out=\"$2\"; fi\n\
+           if [ \"$1\" = --image ]; then test -f \"$2\" || exit 3; fi\n\
+           shift\n\
+         done\n\
+         case \"$prompt\" in *bang*) a='Bang, 2.';; *) a='Mint, 4.';; esac\n\
+         echo \"$a\" > \"$out\"\n\
+         echo 'progress noise'\n",
+        log = log.display()
+    );
+    std::fs::write(bin.join("codex"), script).unwrap();
+    std::fs::set_permissions(bin.join("codex"), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::cargo_bin("synthetic-customers")
+        .unwrap()
+        .arg("run")
+        .arg(f.path("run.toml"))
+        .arg("--out")
+        .arg(f.path("out"))
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let log = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(log.matches("ARGS: exec ").count(), 6, "{log}");
+    // The prompt comes on stdin (`-`), before `--image` could swallow it.
+    assert_eq!(log.matches(" - --image ").count(), 3, "{log}");
+    assert_eq!(
+        log.matches("How likely are you to purchase the product?")
+            .count(),
+        6
+    );
+    let rows = read_data(&f.path("out/answers.jsonl"));
+    assert_eq!(rows.len(), 6);
+    for r in &rows {
+        let expected = if r["concept"] == "Mint" {
+            "Mint, 4."
+        } else {
+            "Bang, 2."
+        };
+        assert_eq!(r["answer"], expected, "answers never cross Concepts");
+    }
+}
+
+#[test]
+fn a_missing_respondent_cli_fails_before_asking_anyone() {
+    let f = Fixture::new(&run_file("scorer = \"fake\"\ncustomers_per_concept = 4"));
+    let empty = f.path("empty-bin");
+    std::fs::create_dir(&empty).unwrap();
+    let output = Command::cargo_bin("synthetic-customers")
+        .unwrap()
+        .arg("run")
+        .arg(f.path("run.toml"))
+        .arg("--out")
+        .arg(f.path("out"))
+        .env("PATH", &empty)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("`claude` is not installed or not on the PATH"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!f.path("out/answers.jsonl").exists());
 }

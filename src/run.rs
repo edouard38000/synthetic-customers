@@ -109,19 +109,6 @@ pub fn run(
         (setup.seed, Vec::new())
     };
 
-    // A report left from an earlier run must not sit next to new answers.
-    let old_report = out_dir.join(REPORT_FILE);
-    if old_report.exists() {
-        std::fs::remove_file(&old_report)
-            .with_context(|| format!("cannot remove old {}", old_report.display()))?;
-    }
-    std::fs::write(out_dir.join(RUN_FILE_COPY), run_file_text)
-        .context("cannot save a copy of the run file")?;
-    std::fs::write(&state_path, serde_json::to_string(&RunState { seed })?)
-        .with_context(|| format!("cannot write {}", state_path.display()))?;
-    // Rewrite the kept answers, dropping a line cut short by an interruption.
-    write_records(&data_path, &records)?;
-
     let scorer = SsrScorer::new(setup.embedder, &setup.anchor_sets, setup.epsilon)?;
 
     // The same seed always gives the same Synthetic customers, so a resume
@@ -161,6 +148,20 @@ pub fn run(
             );
         }
     }
+    // Only now, with the earlier answers checked, touch the output folder.
+    // A report left from an earlier run must not sit next to new answers.
+    let old_report = out_dir.join(REPORT_FILE);
+    if old_report.exists() {
+        std::fs::remove_file(&old_report)
+            .with_context(|| format!("cannot remove old {}", old_report.display()))?;
+    }
+    std::fs::write(out_dir.join(RUN_FILE_COPY), run_file_text)
+        .context("cannot save a copy of the run file")?;
+    std::fs::write(&state_path, serde_json::to_string(&RunState { seed })?)
+        .with_context(|| format!("cannot write {}", state_path.display()))?;
+    // Rewrite the kept answers, dropping a line cut short by an interruption.
+    write_records(&data_path, &records)?;
+
     let jobs: Vec<(usize, usize)> = run_file
         .concepts
         .iter()
