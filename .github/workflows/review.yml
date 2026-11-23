@@ -1,0 +1,18 @@
+# The review loop (edouard38000/review-loop), pinned at v6. Copied from the
+# header comment of review-loop's .github/workflows/review.yml.
+name: Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  review:
+    uses: edouard38000/review-loop/.github/workflows/review.yml@v6
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      runner: '["self-hosted","victus"]'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
