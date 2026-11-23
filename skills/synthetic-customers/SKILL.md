@@ -1,6 +1,6 @@
 ---
 name: synthetic-customers
-description: Tests a product idea on AI-played Synthetic customers and reports how much they would want to buy it, using semantic similarity rating (SSR, arXiv 2510.08338). The user describes one or several Concepts and who they are for in plain words; the skill proposes a Customer mix (ages, genders, incomes, regions with shares), waits for the user to confirm it, runs the synthetic-customers command-line tool and reads back the ranked report with its limits. Use when someone wants to know whether people would buy an idea, or which version, price, name or wording people prefer, before paying for a real survey. Works in Claude Code (customers played through `claude -p`) and Codex (through `codex exec`). Needs no API key.
+description: Tests a product idea on AI-played Synthetic customers and reports how much they would want to buy it, using semantic similarity rating (SSR, arXiv 2510.08338). The user describes one or several Concepts and who they are for in plain words; the skill proposes a Customer mix (ages, genders, incomes, regions with shares), waits for the user to confirm it, runs the synthetic-customers command-line tool and reads back the ranked report with its limits. Use when someone asks whether people would buy an idea, wants a concept test, price test or quick consumer survey, or wants to know which version, price, name or wording people prefer before paying for a real survey. Works in Claude Code (customers played through `claude -p`) and Codex (through `codex exec`). Needs no API key.
 ---
 
 # Synthetic customers
@@ -72,7 +72,9 @@ platform has no prebuilt binary, and `cargo` is installed, build it instead:
 Then run `synthetic-customers setup` once. It checks that `claude` or `codex`
 is on the PATH and downloads the local Scorer's model (about 130 MB, once;
 later runs score offline). It ends with `Ready: runs with scorer = "local" now
-score offline.`
+score offline.` If it warns that neither `claude` nor `codex` is on the
+PATH, stop: real customers can't be asked; the user needs Claude Code or Codex
+installed and logged in.
 
 ### 2. Understand the Concepts and the audience
 
@@ -82,7 +84,7 @@ From the user's words, get:
   would read: what it is, what it does, the price if known, how it's sold. Two
   to five sentences, written like a product description, not a pitch deck. Keep
   the user's facts; don't invent features or prices. If they gave a price,
-  keep it in the text.
+  keep it in the text. If the currency doesn't fit the country, ask.
 - **Who it is for**, in their words ("parents in the US with young kids").
 
 Ask only what you can't reasonably assume, in one message. Recommend testing
@@ -111,8 +113,8 @@ Customer mix
   region: Northeast 20% · Midwest 20% · South 35% · West 25%
 
 Run: 200 Synthetic customers per Concept (400 in all), played by
-Claude Haiku, 8 at a time, scored by the local Scorer (no key, nothing leaves
-your computer). Estimated time: about 7 minutes.
+Claude Haiku, 8 at a time (calls on your Claude plan), scored on your
+computer by the local Scorer (no key). Estimated time: about 7 minutes.
 
 Before you confirm: ...limits, see below...
 ```
@@ -123,10 +125,16 @@ Before you confirm: ...limits, see below...
   down Purchase intent by attributes named with *age* or *income*; a different
   name for those two loses the breakdown.
 - Values are short labels a person would recognise ("18-34", "middle",
-  "Midwest"); fit them to the audience and country the user named. Leave out
-  an attribute only if the user wants it out.
-- Each attribute's shares are fractions that add up to 1 (0.25, not 25).
-  Show them as percentages to the user, write fractions in the file.
+  "Midwest"); fit them to the audience and country the user named (UK:
+  nations and regions; currency and income bands of that country). The
+  example above is for the US. Leave out an attribute only if the user wants
+  it out.
+- If the user gave an age range, split it into 2–3 bands inside it; don't add
+  ages outside it. For a one-gender or one-region audience, use one value at
+  1.0 (`"woman" = 1.0`).
+- Each attribute's shares are fractions that add up to exactly 1 (0.25, not
+  25); round so they do, e.g. thirds as 0.34, 0.33, 0.33. Show them as
+  percentages to the user, write fractions in the file.
 - Base shares on what you know of the real audience and say they are your
   estimate. The user can change them in words ("more students, fewer
   retirees"): adjust, re-check that each attribute still adds up to 1, and
@@ -163,13 +171,15 @@ ceil(400 ÷ 8) × 8 s = 400 s, about 7 minutes.
 - Gender and region shape who the customers are, but the report shows no
   results by gender or region: the paper found the method doesn't reproduce
   those differences.
+- The report lists a few more limits (the paper used other models and another
+  Scorer); mention that they're there.
 
 Then stop and wait for the user's answer.
 
 ### 4. Write the run file
 
 Only after the user's yes. Write it to a folder named `synthetic-customers` in
-the current directory, with a short name for the idea, e.g.
+the current directory (say where, since that may be a project folder), with a short name for the idea, e.g.
 `synthetic-customers/oat-bar.toml`:
 
 ```toml
@@ -195,6 +205,17 @@ text = "..."
 [customer_mix.gender]
 "woman" = 0.5
 "man" = 0.5
+
+[customer_mix.income]
+"low" = 0.30
+"middle" = 0.45
+"high" = 0.25
+
+[customer_mix.region]
+"Northeast" = 0.20
+"Midwest" = 0.20
+"South" = 0.35
+"West" = 0.25
 ```
 
 Use TOML basic strings and escape `"` inside a `text` as `\"`, or use
@@ -211,7 +232,7 @@ synthetic-customers run synthetic-customers/oat-bar.toml --html
   plus `-results`): `report.md`, `report.html` (with `--html`),
   `answers.jsonl` (every answer and its score), `run.toml` (a copy of the run
   file) and `run-state.json`.
-- The tool prints `Asking N of N Synthetic customers, 8 at a time: about …`
+- The tool prints `Asking N of M Synthetic customers, 8 at a time: about …`
   and then progress lines `Answered 40/400 (10%), about 6 minutes left` on
   stderr. Relay progress to the user now and then.
 - A real run takes minutes. Run the command in the background, or with a
@@ -225,11 +246,13 @@ synthetic-customers run synthetic-customers/oat-bar.toml --html
 - If the run stops with **0** customers answered, nothing was learned: don't
   present that report. Tell the user the cause from the end of the error
   (for example the runner is not logged in: `claude` or `codex login`) and
-  run again once it's fixed.
+  run again once it's fixed. The tool's message still says to resume and
+  writes a report; ignore that report (a resume works once the cause is
+  fixed).
 
 **If the run stops early** (usage limit reached, network down), the tool exits
-with an error that starts `the run stopped with N of M Synthetic customers
-answered`. It still wrote `report.md`, marked **Short sample**, from the
+with an error that starts `error: the run stopped with N of M Synthetic
+customers answered`. It still wrote `report.md`, marked **Short sample**, from the
 answers it has. Read that report back as usual, say clearly that it is a
 smaller sample, and offer to continue later with:
 
@@ -240,19 +263,22 @@ synthetic-customers run synthetic-customers/oat-bar.toml --resume --html
 `--resume` asks only the customers who haven't answered; nobody is asked
 twice. Don't change the run file between a run and its resume: the tool
 refuses with `cannot resume: the run file has changed since the run in …
-started`; undo the change, or start a fresh run.
+started`; undo the change, or start a fresh run. That includes
+`concurrency`: to go slower after a usage limit, wait for the limit to reset
+and resume with the same file.
 
 Running again into a folder that already has answers, without `--resume`,
 stops with `… already holds answers from an earlier run`. Use `--resume` to
 continue it; for a fresh run, save the run file under a new name (or pass
-`--out <new folder>`).
+`--out <new folder>`). A fresh run asks every customer again, so check with
+the user first.
 
 Other errors and what to do about them: [reference/troubleshooting.md](reference/troubleshooting.md).
 
 ### 6. Read the report back
 
 Read `report.md` (sections: Ranking, Purchase intent per Concept, Who wants
-it: age and income, Reasons and objections in their own words, Limits, Run
+it: age and income, Reasons and objections, in their own words, Limits, Run
 details, Credits) and tell the user, in plain words and in this order:
 
 1. **The ranking** (several Concepts): which Concept leads, by how much, and
@@ -268,8 +294,9 @@ details, Credits) and tell the user, in plain words and in this order:
    from `answers.jsonl` either.
 4. **The main reasons to buy and the main objections**, quoting the customers'
    own words from the report. These are often the most useful part: what to
-   fix or say differently.
-5. **The limits: the report's whole Limits section**, all five points and the
+   fix or say differently. If the report says no answer was clearly on one
+   side, say so; don't pull quotes from `answers.jsonl` instead.
+5. **The limits: the report's whole Limits section**, every point and the
    closing line, in plain words. Never drop it, even if the user only asks for
    the winner.
 6. The run details in one line: model, Scorer, customers who answered, date.
@@ -294,8 +321,9 @@ hosted Scorers exist for users who already have a key and want them:
 
 Both send every customer's answer to that provider. Only switch when the user
 asks. Tell them to set the variable in the shell that will run the tool, e.g.
-`export OPENAI_API_KEY=...` typed themselves in their terminal (not in this
-chat), then confirm it's set with the `[ -n ... ]` check from the hard rules.
+`export OPENAI_API_KEY=...` typed themselves in a separate terminal (not in
+this chat, and not with a `!` command here, which puts it in the chat), and
+run the `run` command in that terminal, then confirm it's set with the `[ -n ... ]` check from the hard rules.
 If you can't see their shell's environment, they can run the `run` command
 themselves. A missing key stops the run before any customer is asked.
 

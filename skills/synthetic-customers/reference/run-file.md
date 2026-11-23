@@ -45,8 +45,8 @@ Sold in packs of 6 for $4.99.'''
 ## Customer mix
 
 One `[customer_mix.<attribute>]` table per attribute, each value with its
-share. Shares are fractions above 0 that add up to 1 per attribute (within
-0.01).
+share. Shares are fractions above 0 that add up to 1 per attribute. Round
+so they do: thirds as 0.34, 0.33, 0.33 (0.33 × 3 is rejected).
 
 ```toml
 [customer_mix.age]
@@ -76,7 +76,7 @@ the same command again.
 | Message (start) | Fix |
 |---|---|
 | `Customer mix \`age\`: shares add up to 100.000, they must add up to 1 (write 0.25, not 25)` | Write fractions, and make each attribute add up to 1. |
-| `TOML parse error at line …` | Usually an unescaped `"` inside a `text`, or an unknown field. The message points at the line. |
+| `TOML parse error at line …` | Usually an unescaped `"` inside a `text`, an unknown field, or a value the field doesn't accept (`unknown variant …, expected one of haiku, sonnet, opus`). The message points at the line. |
 | `no Concepts: add at least one [[concepts]] table …` | Add a Concept. |
 | `two Concepts are named \`…\`: names must be unique` | Rename one. |
 | `empty Customer mix: …` | Add at least one `[customer_mix.<attribute>]` table. |

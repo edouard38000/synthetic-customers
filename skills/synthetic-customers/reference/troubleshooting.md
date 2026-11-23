@@ -28,11 +28,11 @@ None of these ask any Synthetic customer, so nothing is spent.
 | Message (start) | What to do |
 |---|---|
 | `the local Scorer's model (bge-small-en-v1.5) is not downloaded yet: run \`synthetic-customers setup\` once …` | Run `synthetic-customers setup` (needs the network once), then the same `run` command. |
-| `` `claude` is not installed or not on the PATH `` | You are probably in Codex: set `respondent = "codex"`, remove `model`, tell the user, and run again. If neither runner exists, the user needs Claude Code or Codex installed. |
-| `` `codex` is not installed or not on the PATH `` | The reverse: set `respondent = "claude"`. |
-| `scorer = "openai" needs an OpenAI API key in the OPENAI_API_KEY environment variable, and it is not set …` | Either switch to `scorer = "local"` (no key), or the user sets the variable themselves in the shell that runs the tool. Never ask for the key in the chat. |
+| `` `claude` is not installed or not on the PATH `` | You are probably in Codex: propose `respondent = "codex"` (without `model`), show the changed plan and wait for a yes before running. If neither runner exists, the user needs Claude Code or Codex installed. |
+| `` `codex` is not installed or not on the PATH `` | The reverse: propose `respondent = "claude"`, show the changed plan and wait for a yes. |
+| `scorer = "openai" needs an OpenAI API key in the OPENAI_API_KEY environment variable, and it is not set …` | Either propose `scorer = "local"` (no key) and wait for a yes, or the user sets the variable themselves in the shell that runs the tool. Never ask for the key in the chat. |
 | `scorer = "voyage" needs a Voyage AI API key in the VOYAGE_API_KEY environment variable …` | Same as above. |
-| `invalid run file …` | See the error table in [run-file.md](run-file.md). |
+| `invalid run file …`, or `the image of Concept … is not a file` | See the error table in [run-file.md](run-file.md). |
 | `warning: neither \`claude\` nor \`codex\` is on the PATH` (from `setup`) | Real runs need one of them. |
 
 ## During the run
@@ -70,7 +70,7 @@ far are saved line by line. Run the same command with `--resume`.
 
 | Message (start) | What to do |
 |---|---|
-| `… already holds answers from an earlier run: pass --resume to continue that run, or choose another --out folder` | Add `--resume` to continue it. For a fresh run, use a new run file name or `--out <new folder>`. |
+| `… already holds answers from an earlier run: pass --resume to continue that run, or choose another --out folder` | Add `--resume` to continue it. For a fresh run (which asks every customer again: check with the user first), use a new run file name or `--out <new folder>`. |
 | `cannot resume: the run file has changed since the run in … started (its copy is …/run.toml); undo the change, or choose another --out folder` | Put the run file back as it was (the copy is in the results folder), or start a fresh run in another folder. |
 | `All N Synthetic customers have already answered.` | Not an error: the run was complete. The report is rebuilt. |
 | `Scoring N saved answers that were not scored yet.` | Not an error: a resume first scores answers the Scorer missed last time. |
