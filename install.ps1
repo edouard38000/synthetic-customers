@@ -30,7 +30,7 @@ function Install-SyntheticCustomers {
     if ($env:PROCESSOR_ARCHITEW6432) { $arch = $env:PROCESSOR_ARCHITEW6432 }
     switch ($arch) {
         'AMD64' { }
-        'ARM64' { Write-Host 'Windows on ARM: installing the x64 build, which runs under emulation.' }
+        'ARM64' { Write-Host 'Windows on ARM: installing the x64 build, which runs under emulation on Windows 11.' }
         default { throw "No prebuilt binary for Windows on '$arch'. Build from source with: cargo install --git https://github.com/$Repo" }
     }
     $target = 'x86_64-pc-windows-msvc'
@@ -100,10 +100,12 @@ function Install-SyntheticCustomers {
         Write-Host ''
         Write-Host "$installDir is not on your PATH yet. To add it for your user, run:"
         Write-Host ''
-        Write-Host "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';$installDir', 'User')"
+        $q = $installDir -replace "'", "''"
+        $qDest = $dest -replace "'", "''"
+        Write-Host "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';$q', 'User')"
         Write-Host ''
         Write-Host 'then open a new terminal window. Until then you can run it as:'
-        Write-Host "  & '$dest' --help"
+        Write-Host "  & '$qDest' --help"
     }
 }
 

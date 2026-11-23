@@ -20,7 +20,11 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/edo
 
 To pick a release or a folder, set `SYNTHETIC_CUSTOMERS_VERSION` (e.g. `v0.1.0`)
 or `SYNTHETIC_CUSTOMERS_INSTALL_DIR` before running the script. The scripts
-print how to add the folder to your PATH if it isn't there yet.
+print how to add the folder to your PATH if it isn't there yet. "Latest" means
+the latest full release: pre-releases are only installed when named.
+
+Not covered by prebuilt binaries yet: Linux on ARM and musl Linux (Alpine).
+Use the source install below.
 
 From source, with Rust installed:
 

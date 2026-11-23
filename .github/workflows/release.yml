@@ -4,7 +4,10 @@
 # Builds run natively on GitHub-hosted runners (free for this public repo),
 # one per OS and CPU, so crates that link a native library (the ONNX runtime
 # the local Scorer will bring) build the same way they would on a user's
-# machine. The publish step is light and runs on the victus runner.
+# machine. The publish job also runs GitHub-hosted, not on victus: victus
+# runs CI for pull requests from anyone (public repo), so code from a PR
+# could persist there and tamper with release files before they are
+# checksummed and uploaded with a write token. A fresh hosted VM avoids that.
 #
 # Assets, one per target, plus SHA256SUMS.txt (sha256sum format):
 #   synthetic-customers-<target>.tar.gz   macOS and Linux
@@ -58,7 +61,8 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          # tr: the Windows checkout may have CRLF line endings.
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1 | tr -d '\r')
           if [ "v$version" != "$TAG" ]; then
             echo "::error::Tag $TAG does not match Cargo.toml version $version"
             exit 1
@@ -122,7 +126,7 @@ jobs:
   publish:
     name: Publish release
     needs: build
-    runs-on: [self-hosted, victus]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write

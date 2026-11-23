@@ -32,7 +32,7 @@ download() {
 	if command -v curl >/dev/null 2>&1; then
 		curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$2" "$1"
 	elif command -v wget >/dev/null 2>&1; then
-		wget --https-only -q -O "$2" "$1"
+		wget -q -O "$2" "$1"
 	else
 		fail "this script needs curl or wget to download files"
 	fi
@@ -67,7 +67,13 @@ detect_target() {
 		;;
 	Linux)
 		case "$arch" in
-		x86_64 | amd64) echo "x86_64-unknown-linux-gnu" ;;
+		x86_64 | amd64)
+			# The Linux build needs glibc; musl systems such as Alpine can't run it.
+			if ls /lib/ld-musl-* >/dev/null 2>&1; then
+				fail "no prebuilt binary for musl Linux (e.g. Alpine) yet; build from source with: cargo install --git https://github.com/$REPO"
+			fi
+			echo "x86_64-unknown-linux-gnu"
+			;;
 		*) fail "no prebuilt binary for Linux on $arch yet; build from source with: cargo install --git https://github.com/$REPO" ;;
 		esac
 		;;
@@ -101,7 +107,9 @@ main() {
 	fi
 
 	tmp=$(mktemp -d)
-	trap 'rm -rf "$tmp"' EXIT INT TERM
+	trap 'rm -rf "$tmp"' EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
 
 	say "Downloading $BIN ($version) for $target..."
 	download "$base/$archive" "$tmp/$archive" ||
@@ -134,16 +142,28 @@ main() {
 		say "Run '$BIN --help' to get started."
 		;;
 	*)
+		rc=""
 		case "${SHELL:-}" in
 		*/zsh) rc="$HOME/.zshrc" ;;
-		*/bash) rc="$HOME/.bashrc" ;;
-		*) rc="your shell's startup file" ;;
+		*/bash)
+			if [ "$(uname -s)" = "Darwin" ]; then
+				rc="$HOME/.bash_profile"
+			else
+				rc="$HOME/.bashrc"
+			fi
+			;;
 		esac
+		line="export PATH=\"$install_dir:\$PATH\""
 		say ""
-		say "$install_dir is not on your PATH yet. To add it, run:"
-		say ""
-		# shellcheck disable=SC2016 # $PATH is meant literally here
-		say "  echo 'export PATH=\"$install_dir:\$PATH\"' >> $rc"
+		if [ -n "$rc" ]; then
+			say "$install_dir is not on your PATH yet. To add it, run:"
+			say ""
+			say "  echo '$line' >> \"$rc\""
+		else
+			say "$install_dir is not on your PATH yet. Add this line to your shell's startup file:"
+			say ""
+			say "  $line"
+		fi
 		say ""
 		say "then open a new terminal window. Until then you can run it as:"
 		say "  $install_dir/$BIN --help"
