@@ -27,6 +27,9 @@ use std::path::PathBuf;
 pub const DEFAULT_CUSTOMERS_PER_CONCEPT: usize = 200;
 pub const RECOMMENDED_CUSTOMERS: std::ops::RangeInclusive<usize> = 150..=400;
 pub const DEFAULT_CONCURRENCY: usize = 8;
+/// Hard limits, so a typo cannot exhaust memory or spawn thousands of calls.
+pub const MAX_CUSTOMERS_PER_CONCEPT: usize = 10_000;
+pub const MAX_CONCURRENCY: usize = 64;
 /// How far each attribute's shares may be from summing to 1.
 pub const SHARE_TOLERANCE: f64 = 0.01;
 
@@ -135,6 +138,9 @@ impl RunFile {
         let customers_per_concept = match raw.customers_per_concept {
             None => DEFAULT_CUSTOMERS_PER_CONCEPT,
             Some(n) if n < 1 => bail!("`customers_per_concept` must be at least 1, got {n}"),
+            Some(n) if n as u64 > MAX_CUSTOMERS_PER_CONCEPT as u64 => bail!(
+                "`customers_per_concept` must be at most {MAX_CUSTOMERS_PER_CONCEPT}, got {n}"
+            ),
             Some(n) => n as usize,
         };
         if !RECOMMENDED_CUSTOMERS.contains(&customers_per_concept) {
@@ -149,6 +155,9 @@ impl RunFile {
         let concurrency = match raw.concurrency {
             None => DEFAULT_CONCURRENCY,
             Some(n) if n < 1 => bail!("`concurrency` must be at least 1, got {n}"),
+            Some(n) if n as u64 > MAX_CONCURRENCY as u64 => {
+                bail!("`concurrency` must be at most {MAX_CONCURRENCY}, got {n}")
+            }
             Some(n) => n as usize,
         };
 

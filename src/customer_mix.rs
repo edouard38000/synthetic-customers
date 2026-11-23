@@ -33,13 +33,19 @@ impl CustomerMix {
         }
         let mut normalised = IndexMap::new();
         for (attribute, values) in attributes {
+            if attribute.trim().is_empty() {
+                bail!("Customer mix has an attribute with an empty name");
+            }
             if values.is_empty() {
                 bail!("Customer mix attribute `{attribute}` has no values");
             }
             for (value, share) in &values {
+                if value.trim().is_empty() {
+                    bail!("Customer mix `{attribute}` has a value with an empty name");
+                }
                 if !share.is_finite() || *share <= 0.0 {
                     bail!(
-                        "Customer mix `{attribute}`: share of `{value}` must be above 0, got {share}"
+                        "Customer mix `{attribute}`: share of `{value}` must be a finite number above 0, got {share}"
                     );
                 }
             }

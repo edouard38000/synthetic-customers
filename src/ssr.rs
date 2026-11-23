@@ -104,6 +104,9 @@ impl<'a> SsrScorer<'a> {
         anchor_sets: &[AnchorSet],
         epsilon: f64,
     ) -> Result<Self> {
+        if !(epsilon >= 0.0 && epsilon.is_finite()) {
+            bail!("SSR epsilon must be a finite number of at least 0, got {epsilon}");
+        }
         if anchor_sets.is_empty() {
             bail!("SSR needs at least one Anchor set");
         }

@@ -52,6 +52,12 @@ pub fn run(
 ) -> Result<RunOutput> {
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("cannot create output folder {}", out_dir.display()))?;
+    // A report left from an earlier run must not sit next to new answers.
+    let old_report = out_dir.join(REPORT_FILE);
+    if old_report.exists() {
+        std::fs::remove_file(&old_report)
+            .with_context(|| format!("cannot remove old {}", old_report.display()))?;
+    }
     std::fs::write(out_dir.join(RUN_FILE_COPY), run_file_text)
         .context("cannot save a copy of the run file")?;
 

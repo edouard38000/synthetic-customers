@@ -252,7 +252,7 @@ fn invalid_run_files_get_clear_errors() {
         &format!(
             "scorer = \"fake\"\n{TWO_CONCEPTS}\n[customer_mix.age]\n\"young\" = 1.0\n\"old\" = 0\n"
         ),
-        "share of `old` must be above 0",
+        "share of `old` must be a finite number above 0",
     );
     assert_rejected(
         &run_file("scorer = \"fake\"\ncustomers_per_concept = 0"),
@@ -261,6 +261,18 @@ fn invalid_run_files_get_clear_errors() {
     assert_rejected(
         &run_file("scorer = \"fake\"\nconcurrency = 0"),
         "`concurrency` must be at least 1",
+    );
+    assert_rejected(
+        &run_file("scorer = \"fake\"\ncustomers_per_concept = 1000000000000000"),
+        "`customers_per_concept` must be at most 10000",
+    );
+    assert_rejected(
+        &run_file("scorer = \"fake\"\nconcurrency = 65"),
+        "`concurrency` must be at most 64",
+    );
+    assert_rejected(
+        &format!("scorer = \"fake\"\n{TWO_CONCEPTS}\n[customer_mix.age]\n\"\" = 1.0\n"),
+        "value with an empty name",
     );
     assert_rejected(&run_file("scorer = \"fake\"\nmodel = \"gpt-5\""), "gpt-5");
     assert_rejected(&run_file("scorer = \"magic\""), "magic");
