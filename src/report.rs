@@ -1,7 +1,7 @@
 //! The Markdown report (basic: spread and average Purchase intent per Concept).
 
 use crate::run::ConceptSummary;
-use crate::run_file::RunFile;
+use crate::run_file::{RespondentChoice, RunFile};
 use std::fmt::Write;
 
 pub fn markdown(
@@ -18,6 +18,18 @@ pub fn markdown(
          scored with semantic similarity rating (SSR, arXiv 2510.08338).\n"
     );
 
+    let answered: usize = summaries.iter().map(|s| s.customers).sum();
+    let planned = run_file.customers_per_concept * summaries.len();
+    if answered < planned {
+        let _ = writeln!(
+            md,
+            "> **Short sample.** This run stopped early (for example at a usage limit): \
+             {answered} of the {planned} planned Synthetic customers answered. \
+             The results below are less certain than a full run's. \
+             Run it again with `--resume` to ask only the missing customers.\n"
+        );
+    }
+
     let _ = writeln!(md, "## Purchase intent per Concept\n");
     let _ = writeln!(
         md,
@@ -25,6 +37,15 @@ pub fn markdown(
     );
     let _ = writeln!(md, "|---|---:|---:|---:|---:|---:|---:|---:|");
     for s in summaries {
+        if s.customers == 0 {
+            // Stopped before anyone answered: no scores to show.
+            let _ = writeln!(
+                md,
+                "| {} | 0 | — | — | — | — | — | — |",
+                escape_cell(&s.concept)
+            );
+            continue;
+        }
         let _ = write!(
             md,
             "| {} | {} | {:.2} |",
@@ -44,11 +65,11 @@ pub fn markdown(
     );
 
     let _ = writeln!(md, "## Run details\n");
-    let _ = writeln!(
-        md,
-        "- Model playing the customers: {}",
-        run_file.model.as_str()
-    );
+    let model = match run_file.respondent {
+        RespondentChoice::Claude => run_file.model.as_str(),
+        RespondentChoice::Codex => "codex (default Codex model)",
+    };
+    let _ = writeln!(md, "- Model playing the customers: {model}");
     let _ = writeln!(md, "- Scorer: {scorer_name}");
     let _ = writeln!(
         md,
