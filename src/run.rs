@@ -1,13 +1,13 @@
 //! The run command: sample Synthetic customers, ask each, score, report;
 //! resume a stopped run without asking anyone twice.
 
-use crate::anchors::{AnchorSet, RATINGS};
+use crate::anchors::AnchorSet;
 use crate::customer_mix::{Rng, SyntheticCustomer};
 use crate::embedder::Embedder;
-use crate::report;
 use crate::respondent::Respondent;
 use crate::run_file::RunFile;
 use crate::ssr::{self, Distribution, SsrScorer};
+use crate::{report, report_html};
 use anyhow::{Context, Result, bail};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,7 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 pub const REPORT_FILE: &str = "report.md";
+pub const HTML_FILE: &str = "report.html";
 pub const DATA_FILE: &str = "answers.jsonl";
 pub const RUN_FILE_COPY: &str = "run.toml";
 /// What a resumed run needs besides the run file: the seed that picked the
@@ -41,11 +42,20 @@ pub struct AnswerRecord {
 #[derive(Debug, Serialize, Deserialize)]
 struct RunState {
     seed: u64,
+    /// UTC date the run started, `YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    date: Option<String>,
+    /// The Scorer that scored the saved answers, when it is not the run
+    /// file's (after a re-score with another Scorer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scorer: Option<String>,
 }
 
 pub struct RunOutput {
     pub report: PathBuf,
     pub data: PathBuf,
+    /// Set when the optional HTML report was written.
+    pub html: Option<PathBuf>,
 }
 
 /// Everything a run needs besides the run file; tests swap in fakes here.
@@ -59,6 +69,8 @@ pub struct RunSetup<'a> {
     /// Continue the run already in the output folder, asking only the
     /// Synthetic customers who have not answered yet.
     pub resume: bool,
+    /// Also write the self-contained HTML report.
+    pub html: bool,
 }
 
 /// Ask every Synthetic customer not yet answered, `concurrency` at a time,
@@ -78,7 +90,7 @@ pub fn run(
     let state_path = out_dir.join(STATE_FILE);
     let has_answers = std::fs::metadata(&data_path).is_ok_and(|m| m.len() > 0);
 
-    let (seed, mut records) = if has_answers {
+    let (seed, date, mut records) = if has_answers {
         if !setup.resume {
             bail!(
                 "{} already holds answers from an earlier run: pass --resume to continue \
@@ -104,9 +116,9 @@ pub fn run(
                     state_path.display()
                 )
             })?;
-        (state.seed, load_records(&data_path)?)
+        (state.seed, state.date, load_records(&data_path)?)
     } else {
-        (setup.seed, Vec::new())
+        (setup.seed, Some(today_utc()), Vec::new())
     };
 
     let scorer = SsrScorer::new(setup.embedder, &setup.anchor_sets, setup.epsilon)?;
@@ -157,8 +169,15 @@ pub fn run(
     }
     std::fs::write(out_dir.join(RUN_FILE_COPY), run_file_text)
         .context("cannot save a copy of the run file")?;
-    std::fs::write(&state_path, serde_json::to_string(&RunState { seed })?)
-        .with_context(|| format!("cannot write {}", state_path.display()))?;
+    std::fs::write(
+        &state_path,
+        serde_json::to_string(&RunState {
+            seed,
+            date: date.clone(),
+            scorer: None,
+        })?,
+    )
+    .with_context(|| format!("cannot write {}", state_path.display()))?;
     // Rewrite the kept answers, dropping a line cut short by an interruption.
     write_records(&data_path, &records)?;
 
@@ -279,11 +298,15 @@ pub fn run(
     });
     write_records(&data_path, &records)?;
 
-    let summaries = summarise(run_file, &records);
-    let report_path = out_dir.join(REPORT_FILE);
-    let markdown = report::markdown(run_file, setup.embedder.name(), seed, &summaries);
-    std::fs::write(&report_path, markdown)
-        .with_context(|| format!("cannot write {}", report_path.display()))?;
+    let (report_path, html_path) = write_reports(
+        out_dir,
+        run_file,
+        setup.embedder.name(),
+        seed,
+        date.as_deref(),
+        &records,
+        setup.html,
+    )?;
 
     if let Some(e) = failure {
         return Err(e.context(format!(
@@ -297,7 +320,112 @@ pub fn run(
     Ok(RunOutput {
         report: report_path,
         data: data_path,
+        html: html_path,
     })
+}
+
+/// Write `report.md`, and `report.html` when asked (an old one is removed so
+/// it never sits next to a newer report.md).
+fn write_reports(
+    out_dir: &Path,
+    run_file: &RunFile,
+    scorer_name: &str,
+    seed: u64,
+    date: Option<&str>,
+    records: &[AnswerRecord],
+    html: bool,
+) -> Result<(PathBuf, Option<PathBuf>)> {
+    let analysis = report::analyse(run_file, scorer_name, seed, date, records);
+    let report_path = out_dir.join(REPORT_FILE);
+    std::fs::write(&report_path, report::markdown(&analysis))
+        .with_context(|| format!("cannot write {}", report_path.display()))?;
+    let html_path = out_dir.join(HTML_FILE);
+    if html {
+        std::fs::write(&html_path, report_html::html(&analysis))
+            .with_context(|| format!("cannot write {}", html_path.display()))?;
+        Ok((report_path, Some(html_path)))
+    } else {
+        if html_path.exists() {
+            std::fs::remove_file(&html_path)
+                .with_context(|| format!("cannot remove old {}", html_path.display()))?;
+        }
+        Ok((report_path, None))
+    }
+}
+
+/// Re-score (when `rescore` is given) and re-report a saved output folder
+/// from its `answers.jsonl` and `run.toml`, asking no Synthetic customer.
+pub fn rebuild_report(
+    out_dir: &Path,
+    rescore: Option<(&SsrScorer<'_>, &str)>,
+    html: bool,
+) -> Result<RunOutput> {
+    let run_text = std::fs::read_to_string(out_dir.join(RUN_FILE_COPY)).with_context(|| {
+        format!(
+            "{} has no {RUN_FILE_COPY}: it is not the output folder of a run",
+            out_dir.display()
+        )
+    })?;
+    let run_file = RunFile::parse(&run_text)
+        .with_context(|| format!("invalid {}", out_dir.join(RUN_FILE_COPY).display()))?;
+    let data_path = out_dir.join(DATA_FILE);
+    let mut records = load_records(&data_path)?;
+    let state_path = out_dir.join(STATE_FILE);
+    let mut state: RunState = std::fs::read_to_string(&state_path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .with_context(|| format!("{} is missing or invalid", state_path.display()))?;
+    if let Some((scorer, scorer_name)) = rescore {
+        for r in &mut records {
+            r.distribution = scorer.score(&r.answer)?;
+            r.expected_rating = ssr::expected_rating(&r.distribution);
+        }
+        write_records(&data_path, &records)?;
+        state.scorer = Some(scorer_name.to_string());
+        std::fs::write(&state_path, serde_json::to_string(&state)?)
+            .with_context(|| format!("cannot write {}", state_path.display()))?;
+    }
+    let scorer_name = state
+        .scorer
+        .clone()
+        .unwrap_or_else(|| run_file.scorer.as_str().to_string());
+    let (report, html) = write_reports(
+        out_dir,
+        &run_file,
+        &scorer_name,
+        state.seed,
+        state.date.as_deref(),
+        &records,
+        html,
+    )?;
+    Ok(RunOutput {
+        report,
+        data: data_path,
+        html,
+    })
+}
+
+/// Today's UTC date as `YYYY-MM-DD`.
+pub fn today_utc() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    civil_date((secs / 86_400) as i64)
+}
+
+/// Days since 1970-01-01 to `YYYY-MM-DD` (Howard Hinnant's algorithm).
+fn civil_date(days: i64) -> String {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
 }
 
 /// Read the data file, skipping a last line cut short by an interruption.
@@ -379,41 +507,14 @@ fn human_duration(seconds: f64) -> String {
     }
 }
 
-/// Per-Concept results: the spread is the mean distribution, the average
-/// Purchase intent is the mean expected rating.
-#[derive(Debug, Clone)]
-pub struct ConceptSummary {
-    pub concept: String,
-    pub customers: usize,
-    pub average: f64,
-    pub spread: Distribution,
-}
+#[cfg(test)]
+mod tests {
+    use super::civil_date;
 
-pub fn summarise(run_file: &RunFile, records: &[AnswerRecord]) -> Vec<ConceptSummary> {
-    run_file
-        .concepts
-        .iter()
-        .map(|c| {
-            let rows: Vec<&AnswerRecord> = records.iter().filter(|r| r.concept == c.name).collect();
-            let n = rows.len();
-            let mut spread = [0.0; RATINGS];
-            let mut average = 0.0;
-            for r in &rows {
-                for (s, p) in spread.iter_mut().zip(&r.distribution) {
-                    *s += p;
-                }
-                average += r.expected_rating;
-            }
-            if n > 0 {
-                spread = spread.map(|s| s / n as f64);
-                average /= n as f64;
-            }
-            ConceptSummary {
-                concept: c.name.clone(),
-                customers: n,
-                average,
-                spread,
-            }
-        })
-        .collect()
+    #[test]
+    fn civil_dates() {
+        assert_eq!(civil_date(0), "1970-01-01");
+        assert_eq!(civil_date(19_723), "2024-01-01");
+        assert_eq!(civil_date(11_016), "2000-02-29");
+    }
 }

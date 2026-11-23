@@ -6,6 +6,7 @@ pub mod anchors;
 pub mod customer_mix;
 pub mod embedder;
 pub mod report;
+pub mod report_html;
 pub mod respondent;
 pub mod run;
 pub mod run_file;
