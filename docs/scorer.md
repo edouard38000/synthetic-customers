@@ -7,7 +7,7 @@ on the CPU, needs no account or key, and works offline once downloaded.
 synthetic-customers setup
 ```
 
-`setup` checks that `claude` or `codex` is installed, downloads the model once
+`setup` warns when neither `claude` nor `codex` is installed, downloads the model once
 from Hugging Face into the user cache folder, and checks that it runs. Later
 runs only read the cache and never touch the network; a run with
 `scorer = "local"` and no downloaded model stops before asking any Synthetic
@@ -106,7 +106,8 @@ The answers and ratings were written for this repo.
 below the thresholds below. It runs when the model is cached (after `setup`)
 or when `CI` is set (the victus runner, where it downloads the model once);
 otherwise it is skipped with a message, so `cargo test` needs no network.
-`SYNTHETIC_CUSTOMERS_SKIP_GOLD=1` skips it always.
+`SYNTHETIC_CUSTOMERS_SKIP_GOLD=1` skips it always (`0`, `false` or empty
+count as unset, for both variables).
 
 | Measure | First measurement (2026-11-23) | Test fails when |
 |---|---:|---|

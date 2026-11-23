@@ -49,10 +49,13 @@ fn main() -> Result<()> {
             "| {} | {} | {:.3} | {:.3} | {:.1} | {:.1} |",
             model.name, model.size_mb, agreement.spearman, agreement.mae, load, per_answer
         );
-        drop(ssr);
-        drop(embedder);
-        if clean && model.repo != DEFAULT_MODEL.repo {
-            model.remove(&cache)?;
+    }
+    // After the loop: two candidates can share one repository.
+    if clean {
+        for model in CANDIDATES {
+            if model.repo != DEFAULT_MODEL.repo {
+                model.remove(&cache)?;
+            }
         }
     }
     Ok(())

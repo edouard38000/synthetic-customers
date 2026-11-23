@@ -175,6 +175,9 @@ impl LocalModel {
             .with_context(|| format!("cannot create the model cache {}", cache.display()))?;
         let api = ApiBuilder::from_cache(Cache::new(cache.to_path_buf()))
             .with_progress(true)
+            // Never send a Hugging Face token: the model is public, and the
+            // tool uses no keys.
+            .with_token(None)
             .build()
             .context("cannot set up the Hugging Face download")?;
         let repo = api.repo(self.hub_repo());
@@ -242,7 +245,26 @@ impl LocalEmbedder {
                 ..Default::default()
             }))
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        tokenizer.with_padding(Some(PaddingParams::default()));
+        // Keep the tokenizer's own padding (its pad token and id) when it
+        // has one; pad to the longest text of each batch either way.
+        let padding = match tokenizer.get_padding() {
+            Some(own) => PaddingParams {
+                strategy: tokenizers::PaddingStrategy::BatchLongest,
+                ..own.clone()
+            },
+            None => {
+                let mut padding = PaddingParams::default();
+                for token in ["[PAD]", "<pad>"] {
+                    if let Some(id) = tokenizer.token_to_id(token) {
+                        padding.pad_id = id;
+                        padding.pad_token = token.to_string();
+                        break;
+                    }
+                }
+                padding
+            }
+        };
+        tokenizer.with_padding(Some(padding));
 
         let (plan, inputs) = load_onnx(&onnx_path)
             .with_context(|| format!("cannot load the ONNX model {}", onnx_path.display()))?;
@@ -285,7 +307,7 @@ impl LocalEmbedder {
         let outputs = self.plan.run(inputs)?;
         let hidden = outputs[0].to_plain_array_view::<f32>()?;
         let shape = hidden.shape().to_vec();
-        if shape.len() != 3 || shape[0] != batch {
+        if shape.len() != 3 || shape[0] != batch || shape[1] != len {
             bail!("unexpected model output shape {shape:?}");
         }
         let mut vectors = Vec::with_capacity(batch);
@@ -325,7 +347,8 @@ impl LocalEmbedder {
 fn load_onnx(path: &Path) -> Result<(Plan, Vec<Input>)> {
     match load_onnx_with(path, false) {
         Ok(loaded) => Ok(loaded),
-        Err(_) => load_onnx_with(path, true),
+        Err(first) => load_onnx_with(path, true)
+            .map_err(|second| second.context(format!("first attempt: {first:#}"))),
     }
 }
 

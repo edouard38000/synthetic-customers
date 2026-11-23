@@ -22,15 +22,20 @@ const MIN_SPEARMAN: f64 = 0.88;
 /// First measurement (bge-small-en-v1.5, 2026-11-23): 0.801.
 const MAX_MAE: f64 = 0.90;
 
+/// An environment switch is on unless unset, empty, `0` or `false`.
+fn is_on(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|v| !matches!(v.trim(), "" | "0" | "false" | "FALSE"))
+}
+
 #[test]
 fn local_scorer_agrees_with_the_gold_set() {
-    if std::env::var_os("SYNTHETIC_CUSTOMERS_SKIP_GOLD").is_some_and(|v| !v.is_empty()) {
+    if is_on("SYNTHETIC_CUSTOMERS_SKIP_GOLD") {
         eprintln!("skipped: SYNTHETIC_CUSTOMERS_SKIP_GOLD is set");
         return;
     }
     let cache = local_scorer::cache_dir().unwrap();
     if DEFAULT_MODEL.cached_files(&cache).is_none() {
-        if std::env::var_os("CI").is_none() {
+        if !is_on("CI") {
             eprintln!(
                 "skipped: the local Scorer's model is not cached; run \
                  `synthetic-customers setup` (or set CI=1) to run this test"
